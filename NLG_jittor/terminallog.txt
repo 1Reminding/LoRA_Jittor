@@ -1,0 +1,133 @@
+(lora) # sh create_datasets.sh
+creating e2e datasets...
+train...
+test...
+valid...
+creating webnlg datasets...
+train...
+cate Airport 1090
+cate Astronaut 530
+cate Building 972
+cate City 243
+cate ComicsCharacter 285
+cate Food 1424
+cate Monument 267
+cate SportsTeam 786
+cate University 406
+cate WrittenWork 937
+test...
+cate Airport 136
+cate Monument 33
+cate Building 120
+cate WrittenWork 116
+cate SportsTeam 98
+cate University 51
+cate Astronaut 66
+cate ComicsCharacter 35
+cate City 139
+cate Food 177
+cate Politician 209
+cate MeanOfTransportation 198
+cate Athlete 159
+cate Artist 213
+cate CelestialBody 112
+valid...
+cate Airport 136
+cate Astronaut 67
+cate Building 123
+cate City 31
+cate ComicsCharacter 37
+cate Food 178
+cate Monument 32
+cate SportsTeam 99
+cate University 51
+cate WrittenWork 118
+creating dart datasets...
+train...
+unique source is 30526
+test...
+unique source is 6959
+valid...
+unique source is 2768
+script complete!
+
+
+E2E数据集按类别统计
+==================================================
+类别                   训练集        验证集        测试集        总计        
+无类型                  21950      1191       0          23141     
+coffee shop          10396      3481       287        14164     
+pub                  6531       0          2225       8756      
+restaurant           3184       0          2181       5365      
+总计                  42061      4672       4693       51426     
+
+WebNLG数据集按类别统计
+==================================================
+类别                   训练集        验证集        测试集        总计        
+Food                 1424       178        177        1779      
+Airport              1090       136        136        1362      
+Building             972        123        120        1215      
+WrittenWork          937        118        116        1171      
+SportsTeam           786        99         98         983       
+Astronaut            530        67         66         663       
+University           406        51         51         508       
+City                 243        31         139        413       
+ComicsCharacter      285        37         35         357       
+Monument             267        32         33         332       
+Artist               0          0          213        213       
+Politician           0          0          209        209       
+MeanOfTransportation 0          0          198        198       
+Athlete              0          0          159        159       
+CelestialBody        0          0          112        112       
+总计                  18025      2258       4928       25211      
+
+DART数据集按类别统计 (仅显示前20个类别)
+==================================================
+类别                   训练集        验证集        测试集        总计        
+food                 9960       1063       1315       12338     
+eattype              8196       1314       1793       11303     
+pricerange           8151       839        1144       10134     
+customer rating      7888       1039       772        9699      
+area                 7139       1013       1433       9585      
+familyfriendly       6492       839        1289       8620      
+near                 5505       839        1819       8163      
+country              2487       265        738        3490      
+[title]              3162       61         69         3292      
+location             1706       189        431        2326      
+leader_name          1227       158        489        1874      
+birth_place          438        48         788        1274      
+club                 490        40         605        1135      
+year                 1045       17         26         1088      
+is_part_of           573        68         347        988       
+language             608        56         247        911       
+ingredient           652        86         168        906       
+ethnic_group         543        57         293        893       
+date                 855        22         15         892       
+region               596        80         170        846       
+总计                  62659      6980       12552      82191     
+
+(lora) # python /root/LoRA/NLG_pytorch/sample_datasets.py
+
+处理 e2e 数据集...
+处理 /root/LoRA/NLG_pytorch/data/e2e/train_formatted.jsonl...
+  原始数据: 42061条, 抽样后: 7570条
+处理 /root/LoRA/NLG_pytorch/data/e2e/valid_formatted.jsonl...
+  原始数据: 4672条, 抽样后: 840条
+处理 /root/LoRA/NLG_pytorch/data/e2e/test_formatted.jsonl...
+  原始数据: 4693条, 抽样后: 844条
+
+处理 webnlg 数据集...
+处理 /root/LoRA/NLG_pytorch/data/webnlg_challenge_2017/train_formatted.jsonl...
+  原始数据: 18025条, 抽样后: 3244条
+处理 /root/LoRA/NLG_pytorch/data/webnlg_challenge_2017/valid_formatted.jsonl...
+  原始数据: 2258条, 抽样后: 406条
+处理 /root/LoRA/NLG_pytorch/data/webnlg_challenge_2017/test_formatted.jsonl...
+  原始数据: 4928条, 抽样后: 886条
+
+处理 dart 数据集...
+处理 /root/LoRA/NLG_pytorch/data/dart/train_formatted.jsonl...
+  原始数据: 62659条, 抽样后: 11278条
+处理 /root/LoRA/NLG_pytorch/data/dart/valid_formatted.jsonl...
+  原始数据: 6980条, 抽样后: 1256条
+处理 /root/LoRA/NLG_pytorch/data/dart/test_formatted.jsonl...
+  原始数据: 12552条, 抽样后: 2259条
