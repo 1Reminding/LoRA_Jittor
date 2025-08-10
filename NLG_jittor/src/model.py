@@ -9,34 +9,29 @@ from collections import OrderedDict
 import copy
 import math
 
-import torch
-from torch import nn
-from torch.nn import CrossEntropyLoss, MSELoss
-import torch.nn.functional as F
-from torch.optim import Optimizer
-from torch.optim.lr_scheduler import LambdaLR
-from torch.nn.parameter import Parameter
+import jittor as jt
+from jittor import nn, init, Module
 
 import loralib as lora
 
 
 def gelu(x):
-    return 0.5 * x * (1 + torch.tanh(math.sqrt(2 / math.pi) * (x + 0.044715 * torch.pow(x, 3))))
-
+    tanh = nn.Tanh()
+    return 0.5 * x * (1 + tanh(math.sqrt(2 / math.pi) * (x + 0.044715 * jt.pow(x, 3))))
 
 def gelu_fast(x):
-    return 0.5 * x * (1.0 + torch.tanh(x * 0.7978845608 * (1.0 + 0.044715 * x * x)))
-
+    tanh = nn.Tanh()
+    return 0.5 * x * (1.0 + tanh(x * 0.7978845608 * (1.0 + 0.044715 * x * x)))
 
 def gelu_new(x):
     """ Implementation of the gelu activation function currently in Google Bert repo (identical to OpenAI GPT).
         Also see https://arxiv.org/abs/1606.08415
     """
-    return 0.5 * x * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (x + 0.044715 * torch.pow(x, 3.0))))
-
+    tanh = nn.Tanh()
+    return 0.5 * x * (1.0 + tanh(math.sqrt(2.0 / math.pi) * (x + 0.044715 * jt.pow(x, 3.0))))
 
 def swish(x):
-    return x * torch.sigmoid(x)
+    return x * jt.sigmoid(x)
 
 
 def _gelu_python(x):
@@ -46,48 +41,51 @@ def _gelu_python(x):
         This is now written in C in torch.nn.functional
         Also see https://arxiv.org/abs/1606.08415
     """
-    return x * 0.5 * (1.0 + torch.erf(x / math.sqrt(2.0)))
+    return x * 0.5 * (1.0 + (x / math.sqrt(2.0)).erf())
 
-
-class LayerNorm(nn.Module):
+class LayerNorm(Module):
     def __init__(self, hidden_size, eps=1e-12):
         """Construct a layernorm module in the TF style (epsilon inside the square root)."""
         super(LayerNorm, self).__init__()
-        self.weight = nn.Parameter(torch.ones(hidden_size))
-        self.bias = nn.Parameter(torch.zeros(hidden_size))
+        self.weight = jt.ones(hidden_size)
+        self.bias = jt.zeros(hidden_size)
         self.variance_epsilon = eps
 
-    def forward(self, x):
+    def execute(self, x):
         u = x.mean(-1, keepdim=True)
         s = (x - u).pow(2).mean(-1, keepdim=True)
-        x = (x - u) / torch.sqrt(s + self.variance_epsilon)
+        x = (x - u) / jt.sqrt(s + self.variance_epsilon)
         return self.weight * x + self.bias
 
 
 class Conv1D(nn.Module):
     def __init__(self, nf, nx):
-        super(Conv1D, self).__init__()
+        super().__init__()
         self.nf = nf
-        w = torch.empty(nx, nf)
-        nn.init.normal_(w, std=0.02)
-        self.weight = Parameter(w)
-        self.bias = Parameter(torch.zeros(nf))
+        # 参数初始化：N(0, 0.02)
+        self.weight = jt.randn(nx, nf) * 0.02   # [in, out]
+        self.bias   = jt.zeros(nf)              # [out]
+        # 确保是可训练参数
+        self.weight.start_grad()
+        self.bias.start_grad()
 
-    def forward(self, x):
-        size_out = x.size()[:-1] + (self.nf,)
-        x = torch.addmm(self.bias, x.view(-1, x.size(-1)), self.weight)
-        x = x.view(*size_out)
-        return x
+    def execute(self, x):
+        # x: [..., nx]
+        size_out = x.shape[:-1] + (self.nf,)
+        x2 = x.reshape(-1, x.shape[-1])         # [B*, nx]
+        y  = jt.matmul(x2, self.weight) + self.bias  # [B*, nf]，bias 自动广播
+        y  = y.reshape(size_out)                # [..., nf]
+        return y
 
 
-class Attention(nn.Module):
+class Attention(Module):
     def __init__(self, nx, n_ctx, config, scale=False):
         super(Attention, self).__init__()
         n_state = nx  # in Attention: n_state=768 (nx=n_embd)
         # [switch nx => n_state from Block to Attention to keep identical to TF implem]
         
         assert n_state % config.n_head == 0
-        self.register_buffer("bias", torch.tril(torch.ones(n_ctx, n_ctx)).view(1, 1, n_ctx, n_ctx))
+        self.register_buffer("bias", jt.tril(jt.ones(n_ctx, n_ctx)).view(1, 1, n_ctx, n_ctx))
         self.n_head = config.n_head
         self.split_size = n_state
         self.scale = scale
@@ -105,7 +103,7 @@ class Attention(nn.Module):
         self.config = config
     
     def _attn(self, q, k, v, len_kv=None):
-        w = torch.matmul(q, k)
+        w = jt.matmul(q, k)
         if self.scale:
             w = w / math.sqrt(v.size(-1))
         nd, ns = w.size(-2), w.size(-1)
@@ -117,12 +115,12 @@ class Attention(nn.Module):
         # w : (batch, head, q_seq_length, kv_seq_length)
         # v : (batch, head, kv_seq_length, head_features)
         if len_kv is not None:
-            _len = torch.arange(k.size(-1), device=k.device)
+            _len = jt.arange(k.size(-1), device=k.device)
             _input_msk =  _len[None, :] >= (len_kv)[:, None]
             w = w.masked_fill(_input_msk.unsqueeze(1).unsqueeze(2), -1.0e10) 
 
         w = nn.Softmax(dim=-1)(w)
-        return torch.matmul(w, v)
+        return jt.matmul(w, v)
 
     def merge_heads(self, x):
         x = x.permute(0, 2, 1, 3).contiguous()
@@ -137,7 +135,7 @@ class Attention(nn.Module):
         else:
             return x.permute(0, 2, 1, 3).contiguous()  # (batch, head, seq_length, head_features)
 
-    def forward(self, x, history=None, layer_past=None, len_past=None):
+    def execute(self, x, history=None, layer_past=None, len_past=None):
         hidden_states = x
 
         x = self.c_attn(x)
@@ -157,13 +155,13 @@ class Attention(nn.Module):
             # layer_past, key : (batch, head, seq_length, head_features)
             if len_past is None:
                 past_key, past_value = layer_past[0].transpose(-2, -1), layer_past[1]  # transpose back cf below
-                key = torch.cat((past_key, key), dim=-1)
-                value = torch.cat((past_value, value), dim=-2)
+                key = jt.concat((past_key, key), dim=-1)
+                value = jt.concat((past_value, value), dim=-2)
             else:
                 key_seq = key.shape[-1]
                 assert key_seq == 1
 
-                _batch = torch.arange(0, key.shape[0], dtype=torch.long, device=key.device)
+                _batch = jt.arange(0, key.shape[0])
 
                 past_key, past_value = layer_past[0], layer_past[1]
 
@@ -175,14 +173,14 @@ class Attention(nn.Module):
 
                 len_kv = len_past + 1
 
-        present = torch.stack((key.transpose(-2, -1), value))  # transpose to have same shapes for stacking
+        present = jt.stack((key.transpose(-2, -1), value))  # transpose to have same shapes for stacking
         a = self._attn(query, key, value, len_kv = len_kv)
         a = self.merge_heads(a)
         a = self.c_proj(a)
         return a, present
 
 
-class MLP(nn.Module):
+class MLP(Module):
     def __init__(self, n_state, config):  # in MLP: n_state=3072 (4 * n_embd)
         super(MLP, self).__init__()
         nx = config.n_embd
@@ -196,7 +194,7 @@ class MLP(nn.Module):
         return h2
 
 
-class Block(nn.Module):
+class Block(Module):
     def __init__(self, n_ctx, config, scale=False):
         super(Block, self).__init__()
         nx = config.n_embd
@@ -205,7 +203,7 @@ class Block(nn.Module):
         self.ln_2 = LayerNorm(nx, eps=config.layer_norm_epsilon)
         self.mlp = MLP(4 * nx, config)
 
-    def forward(self, x, layer_past=None, len_past=None):
+    def execute(self, x, layer_past=None, len_past=None):
         a, present = self.attn(self.ln_1(x), layer_past=layer_past, len_past=len_past)
         x = x + a
         m = self.mlp(self.ln_2(x))
@@ -213,7 +211,7 @@ class Block(nn.Module):
         return x, present
 
 
-class GPT2Model(nn.Module):
+class GPT2Model(Module):
     def __init__(self, config):
         super(GPT2Model, self).__init__()
         self.n_layer = config.n_layer
@@ -229,7 +227,7 @@ class GPT2Model(nn.Module):
         self.config = config
 
 
-    def forward(
+    def execute(
         self, 
         input_ids, 
         position_ids=None, 
@@ -245,9 +243,9 @@ class GPT2Model(nn.Module):
             past_length = past[0][0].size(-2)
 
         if position_ids is None and len_past is None:
-            position_ids = torch.arange(
+            position_ids = jt.arange(
                 past_length, input_ids.size(-1) + past_length, 
-                dtype=torch.long, device=input_ids.device
+                # dtype=torch.long, device=input_ids.device
             )
             position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
         elif len_past is not None:
@@ -276,7 +274,7 @@ class GPT2Model(nn.Module):
         return hidden_states.view(*output_shape), presents
 
 
-class GPT2LMHead(nn.Module):
+class GPT2LMHead(Module):
     def __init__(self, model_embeddings_weights, config):
         super(GPT2LMHead, self).__init__()
         self.n_embd = config.n_embd
@@ -287,7 +285,7 @@ class GPT2LMHead(nn.Module):
         self.decoder = nn.Linear(embed_shape[1], embed_shape[0], bias=False)
         self.decoder.weight = model_embeddings_weights  # Tied weights
 
-    def forward(self, hidden_state):
+    def execute(self, hidden_state):
         # Truncated Language modeling logits (we remove the last token)
         # h_trunc = h[:, :-1].contiguous().view(-1, self.n_embd)
         lm_logits = self.decoder(hidden_state)
@@ -327,7 +325,7 @@ class GPT2Config(object):
         self.fix_dropout = fix_dropout
 
 
-class GPT2LMModel(nn.Module):
+class GPT2LMModel(Module):
     def __init__(self, config):
         super(GPT2LMModel, self).__init__()
         self.transformer = GPT2Model(config)
@@ -338,7 +336,7 @@ class GPT2LMModel(nn.Module):
         """ Make sure we are sharing the embeddings"""
         self.lm_head.set_embeddings_weights(self.transformer.wte.weight)
 
-    def forward(
+    def execute(
         self, 
         input_ids, 
         lm_labels=None, 
@@ -357,12 +355,12 @@ class GPT2LMModel(nn.Module):
         if lm_labels is not None:
 
             if is_report_accuracy:
-                _pred_token = torch.argmax(lm_logits, dim=-1)
+                _pred_token = jt.argmax(lm_logits, dim=-1)
                 _hit = (_pred_token == lm_labels) * lm_mask
 
-                _t1_acc = torch.zeros(_batch, dtype=torch.float, device=input_ids.device)
-                _all_acc = torch.zeros(_batch, dtype=torch.float, device=input_ids.device)
-                
+                _t1_acc = jt.zeros(_batch)
+                _all_acc = jt.zeros(_batch)
+
                 for _b in range(0, _batch):
                     for _i in range(0, _len):
                         if lm_mask[_b, _i] >= 1.0:
@@ -391,11 +389,10 @@ class GPT2LMModel(nn.Module):
                 loss = (1.0 - label_smooth) * nll_loss + label_smooth * smooth_loss
                 loss = loss.view(_batch, _len)
             else:
-                loss_fct = nn.CrossEntropyLoss(ignore_index=-1, reduce=False)
-                loss = loss_fct(lm_logits.view(-1, lm_logits.size(-1)), lm_labels.view(-1)).view(_batch, _len)
-
+                loss = nn.cross_entropy_loss(lm_logits.view(-1, lm_logits.size(-1)), lm_labels.view(-1),reduction='none').view(_batch, _len)
+           
             if lm_mask is None:
-                lm_mask = torch.ones(loss.shape, dtype=loss.dtype, device=loss.device)
+                lm_mask = jt.ones(loss.shape)
             loss = loss * lm_mask 
 
             loss = loss.sum() / (lm_mask.sum() + 0.0001)
@@ -408,12 +405,12 @@ class GPT2LMModel(nn.Module):
            
     def _init_weights(self, module):
         if isinstance(module, (nn.Linear, nn.Embedding)):
-            module.weight.data.normal_(mean=0.0, std=0.02)
+            init.gauss_(jt.Var(module.weight), mean=0.0, std=0.02)
         elif isinstance(module, nn.LayerNorm):
-            module.bias.data.zero_()
-            module.weight.data.fill_(1.0)
+            init.zero_(jt.Var(module.bias))
+            init.one_(jt.Var(module.weight))
         if isinstance(module, nn.Linear) and module.bias is not None:
-            module.bias.data.zero_()
+            init.zero_(jt.Var(module.bias))
 
     def load_weight(self, state_dict):
         if 'model_state_dict' in state_dict:
