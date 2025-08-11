@@ -9,19 +9,37 @@ import os, sys
 import numpy as np
 import itertools
 
-import random
 import jittor as jt
 from jittor import nn
+import random
+from jittor.dataset import DataLoader
 
-from model import GPT2LMModel, GPT2Config  
-from data import FT_Dataset          # 替代 DataLoader 的数据集封装逻辑
+from gpu import (
+    add_gpu_params, 
+    parse_gpu, 
+    cleanup
+    # distributed_opt, 
+    # distributed_gather, 
+    # distributed_sync, 
+
+)
+from optimizer import (
+    create_adam_optimizer, 
+    create_optimizer_scheduler, 
+    add_optimizer_params, 
+    create_adam_optimizer_from_args
+)
+
+from data_utils import FT_Dataset
+from model import GPT2Config, GPT2LMModel
 from exp_utils import create_exp_dir
+
 import loralib as lora
 
-parser = argparse.ArgumentParser(description='Jittor GPT2 ft script')
+parser = argparse.ArgumentParser(description='jittor GPT2 ft script')
 
-# add_gpu_params(parser)
-# add_optimizer_params(parser)
+add_gpu_params(parser)
+add_optimizer_params(parser)
 
 parser.add_argument('--train_data', required=True, help='location of training data corpus')
 
@@ -84,7 +102,7 @@ def print_args(args):
 
 class AverageMeter(object):
     """Computes and stores the average and current value
-         Imported from https://github.com/pytorch/examples/blob/master/imagenet/main.py#L247-L262
+         Imported from https://github.com/pyjt/examples/blob/master/imagenet/main.py#L247-L262
     """
     def __init__(self):
         self.reset()
@@ -103,60 +121,67 @@ class AverageMeter(object):
 
 
 def optimizer_step(_loss, _optimizer, _model, _schedule, args, is_update=True):
-    # 做梯度累积缩放：等价于对大 batch 的平均 loss 反传
-    _loss = _loss / max(1, args.grad_acc)
+    # if args.fp16:
+    #     with amp.scale_loss(_loss, _optimizer) as _scaled_loss:
+    #         _scaled_loss.backward()
+    # else:
+    #     _loss.backward()
+    # Core Debug??
     _optimizer.backward(_loss)
 
     if is_update:
         if args.clip > 0:
-            # 用 Jittor 的裁剪接口
-            nn.clip_grad_norm(_model.parameters(), args.clip)
+            _optimizer.clip_grad_norm(_model.parameters(), args.clip)
 
-        _optimizer.step()
+        _optimizer.step()        
         _optimizer.zero_grad()
 
     if _schedule is not None:
         _schedule.step()
 
+
 def evaluate(model, valid_loader, args):
     model.eval()
+    total_loss = 0.
     start_time = time.time()
+
     avg_lm_loss = AverageMeter()
 
     with jt.no_grad():
         for idx, data in enumerate(valid_loader):
-            # 保证 batch 中是 jt.Var
-            batch = {k: (v if isinstance(v, jt.Var) else jt.array(v))
-                     for k, v in data.items()}
-                # 2) 规范 dtype（关键就这三行）
-            batch['input']  = batch['input'].int32()     # token ids
-            batch['target'] = batch['target'].int32()    # labels
-            batch['mask']   = batch['mask'].float32()    # loss mask / attention mask   
+            data = {key: value for key, value in data.items()}
 
-            lm_logits, loss = model(
-                batch['input'],
-                lm_labels=batch['target'],
-                lm_mask=batch['mask']
-            )
-            loss = loss.mean()
-            loss.sync()                     # 只同步这一个标量即可
+            _input = data['input'].to(args.device)
+            _target = data['target'].to(args.device)
+            _msk = data['mask'].to(args.device)
 
+            _lm_logits, _loss = model(_input, lm_labels=_target, lm_mask=_msk) 
+            # Debug 0705
+            jt.sync_all(True)
+            loss = _loss.mean() 
+            
             avg_lm_loss.update(loss.item())
 
             if idx % 100 == 0:
-                print('eval samples:', idx, 'loss:', f'{loss.item():.6f}')
+                print('eval samples:', idx, 'loss:', loss.float())
 
-    print('average loss', avg_lm_loss.avg)
+        total_time = time.time() - start_time
+        print('average loss', avg_lm_loss.avg)
+
+        # del _input, _target, _msk, _lm_logits, _loss
+        # jt.gc()
+
     return avg_lm_loss.avg, math.exp(avg_lm_loss.avg)
 
+
 def train_validate(
-    model,
-    optimizer,
-    scheduler,
-    train_loader,
-    valid_loader,
-    args,
-    train_step=0,
+    model, 
+    optimizer, 
+    scheduler, 
+    train_loader, 
+    valid_loader, 
+    args, 
+    train_step=0, 
     epoch=0
 ):
     model.train()
@@ -165,62 +190,53 @@ def train_validate(
     log_start_time = time.time()
     best_val_ppl = None
 
-    # PyTorch DDP 专用，Jittor 无需：
     # train_loader.sampler.set_epoch(epoch)
 
     for idx, data in enumerate(train_loader):
-        # 1) 转成 jt.Var
-        batch = {k: (v if isinstance(v, jt.Var) else jt.array(v)) for k, v in data.items()}
-         # 2) 规范 dtype（关键就这三行）
-        batch['input']  = batch['input'].int32()
-        batch['target'] = batch['target'].int32()
-        batch['mask']   = batch['mask'].float32()
+        data = {key: value for key, value in data.items()}
+
+        _input = data['input'].to(args.device)
+        _target = data['target'].to(args.device)
+        _msk = data['mask'].to(args.device)
 
         _lm_logits, _lm_loss = model(
-            batch['input'],
-            lm_labels=batch['target'],
-            lm_mask=batch['mask'],
-            label_smooth=args.label_smooth
-        )
-        _lm_loss = _lm_loss.mean()
-        _lm_loss.sync()  # 同步，便于 .item()
+            _input, lm_labels=_target, lm_mask=_msk, label_smooth=args.label_smooth
+        ) 
+        # Debug 0705
+        # jt.sync_all(True)
+        _lm_loss = _lm_loss.mean() 
 
         train_step += 1
-        is_update = (train_step % args.grad_acc == 0)
-        avg_lm_loss.update(_lm_loss.item())
+        is_update = True if train_step % args.grad_acc == 0 else False
+        # avg_lm_loss.update(_lm_loss.item())
+        # Core Debug?
+        # avg_lm_loss.update(_lm_loss.numpy().item())
+        avg_lm_loss.update(float(_lm_loss.data))
 
-        # 这里内部会做 loss/(grad_acc) 的处理（或你也可在外面先除）
-        optimizer_step(_lm_loss, optimizer, model, scheduler, args, is_update=is_update)
+        
+        optimizer_step(
+            _lm_loss/(args.grad_acc), optimizer, model, scheduler, args, is_update=is_update
+        )
 
-        if train_step % args.log_interval == 0:
+        if train_step % args.log_interval == 0: 
             elapsed = time.time() - log_start_time
-            # 兼容两种取 lr 的方式
-            try:
-                lr = optimizer.param_groups[0]['lr']
-            except Exception:
-                lr = getattr(optimizer, "lr", None)
-            log_str = (
-                f'| epoch {epoch:3d} step {train_step:>8d} | {idx + 1:>6d} batches | '
-                f'lr {lr:.3g} | ms/batch {elapsed * 1000 / args.log_interval:5.2f} | '
-                f'loss {avg_lm_loss.val:5.2f} | avg loss {avg_lm_loss.avg:5.2f} | '
-                f'ppl {math.exp(avg_lm_loss.avg):5.2f}'
-            )
-            print(log_str)
+            lr = optimizer.param_groups[0]['lr']
+            log_str = f'| epoch {epoch:3d} step {train_step:>8d} | { idx + 1:>6d} batches | ' \
+                      f'lr {lr:.3g} | ms/batch {elapsed * 1000 / args.log_interval:5.2f} | ' \
+                      f'loss {avg_lm_loss.val:5.2f} | avg loss {avg_lm_loss.avg:5.2f} | ' \
+                      f'ppl {math.exp(avg_lm_loss.avg):5.2f}'
+
+            if args.rank == 0: 
+                print(log_str)
             log_start_time = time.time()
             avg_lm_loss.reset()
-
-        # save checkpoint
-        if train_step % args.save_interval == 0:
-            os.makedirs(args.work_dir, exist_ok=True)
-            model_path = os.path.join(args.work_dir, f'model.{train_step}.pkl')
-            print('saving checkpoint', model_path)
-            # 如果你有 jittor 版 lora 工具，可优先保存 lora 权重
-            try:
-                import loralib_jt as lora_jt
-                state = lora_jt.lora_state_dict(model)
-            except Exception:
-                state = model.state_dict()
-            jt.save(state, model_path)
+        
+        if train_step % args.save_interval == 0: 
+            if args.rank == 0:
+                model_path = os.path.join(args.work_dir, f'model.{train_step}.pt')
+                print('saving checkpoint', model_path)
+                jt.save({'model_state_dict': lora.lora_state_dict(model)}, model_path)
+            # distributed_sync(args)
 
         # evaluation interval
         if train_step % args.eval_interval == 0:
@@ -230,153 +246,139 @@ def train_validate(
 
             if best_val_ppl is None or valid_ppl < best_val_ppl:
                 best_val_ppl = valid_ppl
+                
+            log_str = f'| Eval {train_step // args.eval_interval:3d} at step {train_step:>8d} | ' \
+                      f'time: {time.time() - eval_start_time:5.2f}s | valid loss {valid_loss:5.2f} | ' \
+                      f'valid ppl {valid_ppl:5.2f} | best ppl {best_val_ppl:5.2f} '
 
-            log_str = (
-                f'| Eval {train_step // args.eval_interval:3d} at step {train_step:>8d} | '
-                f'time: {time.time() - eval_start_time:5.2f}s | valid loss {valid_loss:5.2f} | '
-                f'valid ppl {valid_ppl:5.2f} | best ppl {best_val_ppl:5.2f} '
-            )
-            print('-' * 100)
-            print(log_str)
-            print('-' * 100)
+            if args.rank == 0:
+                print('-' * 100)
+                print(log_str)
+                print('-' * 100)
 
             model.train()
 
-        if args.max_step is not None and train_step >= args.max_step:
+        if train_step == args.max_step:
             break
 
-    # final save
-    os.makedirs(args.work_dir, exist_ok=True)
-    model_path = os.path.join(args.work_dir, f'model.{train_step}.pkl')
-    print('saving checkpoint', model_path)
-    jt.save(model.state_dict(), model_path)
-
+    if args.rank == 0:
+        model_path = os.path.join(args.work_dir, f'model.{train_step}.pt')
+        print('saving checkpoint', model_path)
+        jt.save({'model_state_dict': model.state_dict()}, model_path) 
+    # distributed_sync(args)
     return train_step
+
+# Core Debug:
+import os
+os.environ["JT_SAVE_MEM"]="1"
+os.environ["cpu_mem_limit"]=str(32*1024**3)
+os.environ["device_mem_limit"]=str(16*1024**3)
+# jt.flags.lazy_execution = 0
+
 
 if __name__ == '__main__':
     args = parser.parse_args()
+    parse_gpu(args)
     print_args(args)
 
-    jt.flags.use_cuda = 1
+    if args.fp16:
+        try:
+            from apex import amp
+        except Exception as e:
+            warnings.warn('Could not import amp, apex may not be installed')
+
     jt.set_global_seed(args.random_seed)
     random.seed(args.random_seed)
-
-    # 单卡：固定 rank=0
-    args.rank = 0
+    
     if args.rank == 0:
         args.logging = create_exp_dir(args.work_dir)
 
-    # ===== 数据 =====
     train_data = FT_Dataset(
-        args.train_data, args.train_batch_size, args.seq_len,
-        joint_lm=(args.obj=='jlm')
+        args.train_data, args.train_batch_size, args.seq_len, 
+        joint_lm=args.obj=='jlm'
     )
+    # print(f"INFO: train_data len: {len(train_data)}")     
+    
     valid_data = FT_Dataset(
-        args.valid_data, args.valid_batch_size, args.seq_len
+        args.valid_data, args.valid_batch_size, args.seq_len,
     )
 
-    # 極簡 Loader：假設 FT_Dataset 的 __getitem__ 就返回“已分好批”的 dict
-    class SimpleLoader:
-        def __init__(self, dataset, shuffle=False):
-            self.dataset, self.shuffle = dataset, shuffle
-        def __len__(self): return len(self.dataset)
-        def __iter__(self):
-            idxs = list(range(len(self.dataset)))
-            if self.shuffle: random.shuffle(idxs)
-            for i in idxs:
-                yield self.dataset[i]
+    train_loader = DataLoader(
+        train_data, batch_size=args.train_batch_size, num_workers=0, 
+        shuffle=False, drop_last=True,
+    )
+    # Weihua Info: 打印每个 epoch 有多少 step（即 batch 数），等于训练集样本数 // batch size
+    # print(f"INFO: Steps(batch) in each Epoch: {len(train_loader)}")
+    
+    valid_loader = DataLoader(
+        valid_data, batch_size=args.valid_batch_size, num_workers=0, 
+        shuffle=False, drop_last=False,
+    )
 
-    train_loader = SimpleLoader(train_data, shuffle=True)
-    valid_loader = SimpleLoader(valid_data, shuffle=False)
-
-    # ===== 模型配置 =====
     if args.model_card == 'gpt2.sm':
         config = GPT2Config(
-            n_embd=768, n_layer=12, n_head=12,
-            lora_attn_dim=args.lora_dim, lora_attn_alpha=args.lora_alpha, lora_dropout=args.lora_dropout,
+            n_embd=768, n_layer=12, n_head=12, 
+            lora_attn_dim=args.lora_dim, 
+            lora_attn_alpha=args.lora_alpha, 
+            lora_dropout=args.lora_dropout,
         )
     elif args.model_card == 'gpt2.md':
         config = GPT2Config(
-            n_embd=1024, n_layer=24, n_head=16,
-            lora_attn_dim=args.lora_dim, lora_attn_alpha=args.lora_alpha, lora_dropout=args.lora_dropout,
+            n_embd=1024, n_layer=24, n_head=16, 
+            lora_attn_dim=args.lora_dim, 
+            lora_attn_alpha=args.lora_alpha, 
+            lora_dropout=args.lora_dropout,
         )
-    else:  # gpt2.lg
+    elif args.model_card == 'gpt2.lg':
         config = GPT2Config(
-            n_embd=1280, n_layer=36, n_head=20,
-            lora_attn_dim=args.lora_dim, lora_attn_alpha=args.lora_alpha, lora_dropout=args.lora_dropout,
+            n_embd=1280, n_layer=36, n_head=20, 
+            lora_attn_dim=args.lora_dim, 
+            lora_attn_alpha=args.lora_alpha, 
+            lora_dropout=args.lora_dropout,
         )
 
     lm_net = GPT2LMModel(config)
-
-    # ===== 预训练权重加载 =====
     if args.init_checkpoint is not None:
         print('loading model pretrained weight.')
-        try:
-            state = jt.load(args.init_checkpoint)
-            # 如果你的 Jittor 模型实现了同名接口：
-            if hasattr(lm_net, "load_weight"):
-                lm_net.load_weight(state)
-            else:
-                lm_net.load(args.init_checkpoint)   # 或者直接用你实现的 model.load
-        except Exception as e:
-            print(f"[WARN] load failed via jt.load: {e}; trying model.load(path)")
-            lm_net.load(args.init_checkpoint)
+        lm_net.load_weight(jt.load(args.init_checkpoint))    
 
-    # 不需要 .cuda()（Jittor 用全局 flag 控制）
-    # lm_net = lm_net.cuda()
+    lm_net = lm_net.cuda()
 
-    # LoRA（若你有 Jittor 版 lora 工具）
-    
     if args.lora_dim > 0:
         lora.mark_only_lora_as_trainable(lm_net)
+    optimizer = create_adam_optimizer_from_args(lm_net, args)
 
-    # ===== 优化器（用 Jittor 自带）=====
-    optimizer = nn.Adam(lm_net.parameters(), lr=args.lr, beta2=args.adam_beta2, weight_decay=args.weight_decay)
-
-    # ===== 训练步数 =====
     if args.max_step is None:
-        args.max_step = args.max_epoch * len(train_loader)
+        # Debug: Jittor world_size default 0
+        # Core Debug: /2
+        args.world_size = 1
+        args.max_step = (args.max_epoch * train_data.num_batches + args.world_size - 1) // args.world_size
         print('set max_step:', args.max_step)
 
-    # ===== 简易线性 scheduler（warmup+decay）=====
-    class LinearScheduler:
-        def __init__(self, opt, warmup_steps, total_steps):
-            self.opt = opt
-            self.warmup = warmup_steps
-            self.total = max(total_steps, 1)
-            self.step_num = 0
-            self.base_lr = [g['lr'] for g in self.opt.param_groups]
-        def step(self):
-            self.step_num += 1
-            if self.warmup > 0 and self.step_num < self.warmup:
-                scale = self.step_num / self.warmup
-            else:
-                scale = max(0.0, 1.0 - (self.step_num - self.warmup) / max(1, self.total - self.warmup))
-            for pg, lr0 in zip(self.opt.param_groups, self.base_lr):
-                pg['lr'] = lr0 * scale
+    scheduler = create_optimizer_scheduler(optimizer, args)
+    if args.fp16:
+        lm_net, optimizer = amp.initialize(lm_net, optimizer, opt_level="O1")
+    # lm_net, optimizer = distributed_opt(args, lm_net, optimizer, grad_acc=args.grad_acc)
 
-    scheduler = LinearScheduler(optimizer, warmup_steps=getattr(args, 'warmup_step', 0), total_steps=args.max_step)
-
-    # AMP（如需）：Jittor 方式（可选）
-    # if args.fp16:
-    #     jt.flags.amp_level = 1  # 或 jt.flags.use_fp16 = 1，视本地版本
-
-    # 训练循环
     try:
         train_step = 0
         for epoch in itertools.count(start=1):
             train_step = train_validate(
-                lm_net, optimizer, scheduler, train_loader, valid_loader, args,
+                lm_net, optimizer, scheduler, train_loader, valid_loader, args, 
                 train_step=train_step, epoch=epoch
             )
+  
             if train_step >= args.max_step or (args.max_epoch is not None and epoch >= args.max_epoch):
-                print('-' * 100)
-                print('End of training')
+                if args.rank == 0:
+                    print('-' * 100)
+                    print('End of training')
                 break
     except KeyboardInterrupt:
-        print('-' * 100)
-        print('Exiting from training early')
+        if args.rank == 0:
+            print('-' * 100)
+            print('Exiting from training early')
 
-    # 分布式清理（Jittor 单卡不需要）
-    # cleanup(args)
-    print('Done.')
+
+    # distributed_sync(args)
+    print('cleanup dist ...')
+    cleanup(args)
