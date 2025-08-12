@@ -8,6 +8,62 @@ import math
 import os, sys
 import numpy as np
 import itertools
+import os, subprocess, shutil
+
+#自动检测显存大小并动态设置 JT_SAVE_MEM 和限制
+def _get_total_gpu_mem_mb() -> int | None:
+    """Return total memory (MB) of the *first visible* GPU via nvidia-smi, or None."""
+    if not shutil.which("nvidia-smi"):
+        return None
+    # honor CUDA_VISIBLE_DEVICES: pick the first visible id
+    vis = os.environ.get("CUDA_VISIBLE_DEVICES")
+    index = 0
+    if vis:
+        try:
+            index = int(vis.split(",")[0].strip())
+        except Exception:
+            index = 0
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits", "-i", str(index)],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        return int(out.splitlines()[0])
+    except Exception:
+        return None
+
+def _get_total_cpu_mem_mb() -> int | None:
+    """Return total system RAM (MB) if psutil exists; else None."""
+    try:
+        import psutil
+        return int(psutil.virtual_memory().total / (1024 * 1024))
+    except Exception:
+        return None
+
+def setup_jittor_memory_limits(
+    gpu_frac: float = 0.9,   # cap GPU usage at 90% of total
+    cpu_frac: float = 0.8,   # cap CPU RAM at 80% of total
+    save_mem: bool = True,   # enable JT_SAVE_MEM
+):
+    # Enable Jittor "save memory" mode if requested
+    if save_mem:
+        os.environ.setdefault("JT_SAVE_MEM", "1")
+
+    # GPU limit
+    total_gpu_mb = _get_total_gpu_mem_mb()
+    if total_gpu_mb and total_gpu_mb > 0:
+        limit_mb = max(512, int(total_gpu_mb * gpu_frac))
+        os.environ["device_mem_limit"] = str(limit_mb * 1024 * 1024)  # bytes
+
+    # CPU limit
+    total_cpu_mb = _get_total_cpu_mem_mb()
+    if total_cpu_mb and total_cpu_mb > 0:
+        limit_mb = max(1024, int(total_cpu_mb * cpu_frac))
+        os.environ["cpu_mem_limit"] = str(limit_mb * 1024 * 1024)  # bytes
+
+# call before importing jittor
+setup_jittor_memory_limits()
 
 import jittor as jt
 from jittor import nn
@@ -126,7 +182,7 @@ def optimizer_step(_loss, _optimizer, _model, _schedule, args, is_update=True):
     #         _scaled_loss.backward()
     # else:
     #     _loss.backward()
-    # Core Debug??
+
     _optimizer.backward(_loss)
 
     if is_update:
@@ -142,37 +198,29 @@ def optimizer_step(_loss, _optimizer, _model, _schedule, args, is_update=True):
 
 def evaluate(model, valid_loader, args):
     model.eval()
-    total_loss = 0.
     start_time = time.time()
-
     avg_lm_loss = AverageMeter()
 
     with jt.no_grad():
         for idx, data in enumerate(valid_loader):
-            data = {key: value for key, value in data.items()}
+            # 保证是 Jittor Var 且 dtype 合适（索引: int32/64，mask: float32）
+            _input  = data['input']  if isinstance(data['input'], jt.Var)  else jt.array(data['input'],  dtype=jt.int32)
+            _target = data['target'] if isinstance(data['target'], jt.Var) else jt.array(data['target'], dtype=jt.int32)
+            _msk    = data['mask']   if isinstance(data['mask'], jt.Var)   else jt.array(data['mask'],   dtype=jt.float32)
 
-            _input = data['input'].to(args.device)
-            _target = data['target'].to(args.device)
-            _msk = data['mask'].to(args.device)
-
-            _lm_logits, _loss = model(_input, lm_labels=_target, lm_mask=_msk) 
-            # Debug 0705
-            jt.sync_all(True)
-            loss = _loss.mean() 
-            
-            avg_lm_loss.update(loss.item())
+            _lm_logits, _loss = model(_input, lm_labels=_target, lm_mask=_msk)
+            loss = _loss.mean()              # jt.Var
+            avg_lm_loss.update(float(loss.item()))
 
             if idx % 100 == 0:
-                print('eval samples:', idx, 'loss:', loss.float())
+                print('eval samples:', idx, 'loss:', float(loss.item()))
 
-        total_time = time.time() - start_time
-        print('average loss', avg_lm_loss.avg)
+        # 可选：确保所有 kernel 执行完
+        jt.sync_all(True)
 
-        # del _input, _target, _msk, _lm_logits, _loss
-        # jt.gc()
-
+    total_time = time.time() - start_time
+    print('average loss', avg_lm_loss.avg)
     return avg_lm_loss.avg, math.exp(avg_lm_loss.avg)
-
 
 def train_validate(
     model, 
@@ -190,8 +238,6 @@ def train_validate(
     log_start_time = time.time()
     best_val_ppl = None
 
-    # train_loader.sampler.set_epoch(epoch)
-
     for idx, data in enumerate(train_loader):
         data = {key: value for key, value in data.items()}
 
@@ -202,18 +248,12 @@ def train_validate(
         _lm_logits, _lm_loss = model(
             _input, lm_labels=_target, lm_mask=_msk, label_smooth=args.label_smooth
         ) 
-        # Debug 0705
-        # jt.sync_all(True)
+
         _lm_loss = _lm_loss.mean() 
 
         train_step += 1
         is_update = True if train_step % args.grad_acc == 0 else False
-        # avg_lm_loss.update(_lm_loss.item())
-        # Core Debug?
-        # avg_lm_loss.update(_lm_loss.numpy().item())
         avg_lm_loss.update(float(_lm_loss.data))
-
-        
         optimizer_step(
             _lm_loss/(args.grad_acc), optimizer, model, scheduler, args, is_update=is_update
         )
@@ -257,6 +297,7 @@ def train_validate(
                 print('-' * 100)
 
             model.train()
+            # distributed_sync(args)
 
         if train_step == args.max_step:
             break
@@ -268,12 +309,6 @@ def train_validate(
     # distributed_sync(args)
     return train_step
 
-# Core Debug:
-import os
-os.environ["JT_SAVE_MEM"]="1"
-os.environ["cpu_mem_limit"]=str(32*1024**3)
-os.environ["device_mem_limit"]=str(16*1024**3)
-# jt.flags.lazy_execution = 0
 
 
 if __name__ == '__main__':
@@ -297,8 +332,7 @@ if __name__ == '__main__':
         args.train_data, args.train_batch_size, args.seq_len, 
         joint_lm=args.obj=='jlm'
     )
-    # print(f"INFO: train_data len: {len(train_data)}")     
-    
+ 
     valid_data = FT_Dataset(
         args.valid_data, args.valid_batch_size, args.seq_len,
     )
@@ -307,9 +341,7 @@ if __name__ == '__main__':
         train_data, batch_size=args.train_batch_size, num_workers=0, 
         shuffle=False, drop_last=True,
     )
-    # Weihua Info: 打印每个 epoch 有多少 step（即 batch 数），等于训练集样本数 // batch size
-    # print(f"INFO: Steps(batch) in each Epoch: {len(train_loader)}")
-    
+ 
     valid_loader = DataLoader(
         valid_data, batch_size=args.valid_batch_size, num_workers=0, 
         shuffle=False, drop_last=False,
@@ -349,8 +381,8 @@ if __name__ == '__main__':
     optimizer = create_adam_optimizer_from_args(lm_net, args)
 
     if args.max_step is None:
-        # Debug: Jittor world_size default 0
-        # Core Debug: /2
+        #没有启动 mpirun 或 Jittor 多卡模式，实际上 world_size 应该是 1
+        #如果保留原来的 args.world_size（是 0 或未初始化），就会导致 除以 0 或 max_step 计算错误
         args.world_size = 1
         args.max_step = (args.max_epoch * train_data.num_batches + args.world_size - 1) // args.world_size
         print('set max_step:', args.max_step)

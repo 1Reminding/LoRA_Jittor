@@ -30,3 +30,5 @@ def parse_gpu(args):
 def cleanup(args):
     if args.platform == 'k8s' or args.platform == 'philly':
         args.dist.destroy_process_group()
+        
+#jittor可以自动单卡转化为MPI的多卡运行，删去了之前torch相关的分布式函数配置

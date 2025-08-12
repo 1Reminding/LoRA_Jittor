@@ -7,12 +7,11 @@ import glob
 import random
 from collections import Counter, OrderedDict
 import numpy as np
-import torch
+
 import json
 
-import torch
-from torch.utils.data import Dataset
-from torch.utils.data import DataLoader
+import jittor as jt
+from jittor.dataset import Dataset, DataLoader
 
 
 class LMOrderedIterator(object):
@@ -34,10 +33,9 @@ class LMOrderedIterator(object):
         # Work out how cleanly we can divide the dataset into bsz parts.
         self.n_step = len(data) // self.global_bsz # bsz
 
-        self.split_data = torch.tensor(
-            data[rank * self.n_step * bsz : (rank + 1) * self.n_step * bsz], 
-            dtype=torch.long, device=self.device
-        )  # data.view(-1)
+        self.split_data = jt.Var(
+            data[rank * self.n_step * bsz : (rank + 1) * self.n_step * bsz]
+        )   # data.view(-1)
 
         self.split_data = self.split_data.view(bsz, -1) 
 
@@ -51,11 +49,11 @@ class LMOrderedIterator(object):
         # batch_size, lengh;
         _input = self.split_data[:, beg_idx : end_idx].contiguous()
         _target = self.split_data[:, beg_idx+1 : end_idx+1].contiguous()
-
-        _msk = torch.cat(
+#cat(torch)->concat(jittor) 
+        _msk = jt.concat(
             [
-                torch.zeros(bptt-eval_len, dtype=torch.float, device=self.device), 
-                torch.ones(eval_len, dtype=torch.float, device=self.device)
+                jt.zeros(bptt-eval_len).float32(), 
+                jt.ones(eval_len).float32()
             ]
         )
         _msk = _msk.unsqueeze(0).expand_as(_input) # .unsqueeze(-1) # length, 1; 
@@ -120,13 +118,13 @@ class BinLMOrderedIterator(object):
             _inputs.append(_input)
             _targets.append(_target)
 
-        _input = torch.tensor(_inputs, dtype=torch.int64, device=self.device).contiguous()
-        _target = torch.tensor(_targets, dtype=torch.int64, device=self.device).contiguous()
+        _input = jt.Var(_inputs).contiguous()
+        _target = jt.Var(_targets).contiguous()
 
-        _msk = torch.cat(
+        _msk = jt.concat(
             [
-                torch.zeros(bptt-eval_len, dtype=torch.float, device=self.device), 
-                torch.ones(eval_len, dtype=torch.float, device=self.device)
+                jt.zeros(bptt-eval_len), 
+                jt.ones(eval_len)
             ]
         )
         _msk = _msk.unsqueeze(0).expand_as(_input) # .unsqueeze(-1) # length, 1; 
@@ -171,7 +169,6 @@ class BinCorpus(object):
         x = np.fromfile(self.bin_reader, count=count, dtype=np.int)
         return x
 
-
 def get_lm_corpus(data):
     print('Producing dataset {}...'.format(data))
     corpus = Corpus(data)
@@ -199,6 +196,9 @@ class FT_Dataset(Dataset):
     def __init__(self, ft_file, batch_size, max_seq_length, 
                  max_eval_length=0, joint_lm=False, prefix_len=0, infix_len=0, 
                  prefix_cursor=1000000, infix_cursor=2000000):
+        #PyTorch 版 Dataset 是一个简单的基类，没有复杂初始化，所以写自定义 Dataset 不显式调用 super().__init__() 也没问题。
+        #Jittor DataLoader构造函数里会初始化,
+        super().__init__()#用于创建变量
         self.ft_file = ft_file
         self.ft_samples = self.read_ft_file(ft_file)
         self.batch_size = batch_size
@@ -243,19 +243,20 @@ class FT_Dataset(Dataset):
         _msk, _ = padding_tokens(_msk, self.max_seq_length, 0.0, 1)
         
         output = {}
-        output["id"] = torch.tensor(item, dtype=torch.long)
+        # output["id"] = torch.tensor(item, dtype=torch.long)
         
         _query, _query_len = padding_tokens(
             conditions, self.max_seq_length, 0, -1, 
             max_context_length = self.max_seq_length - self.max_eval_length
         )
-        output["query"] = torch.tensor(_query, dtype=torch.long)
-        output["query_len"] = torch.tensor(_query_len, dtype=torch.long)
-
-        output["input"] = torch.tensor(_input, dtype=torch.long) 
-        output["target"] = torch.tensor(_target, dtype=torch.long) 
-
-        output["mask"] = torch.tensor(_msk, dtype=torch.float)
+        #Jittor的jt.Var不接受dtype参数，所以需要使用jt.array来转换数据类型
+        #torch.tensor(x, dtype=...)->jt.array(x)
+        output["id"] = jt.Var(item)
+        output["query"] = jt.Var(_query)
+        output["query_len"] = jt.Var(_query_len)
+        output["input"] = jt.Var(_input) 
+        output["target"] = jt.Var(_target) 
+        output["mask"] = jt.Var(_msk)
         return output
 
     def read_ft_file(self, ft_file):

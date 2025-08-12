@@ -6,7 +6,7 @@ import functools
 import os, shutil
 import numpy as np
 
-import torch
+import jittor as jt
 
 
 def logging(s, log_path, print_=True, log_=True):
@@ -40,7 +40,9 @@ def create_exp_dir(dir_path, scripts_to_save=None, debug=False):
 
     return get_logger(log_path=os.path.join(dir_path, 'log.txt'))
 
-
+#！！！！！！！！这个会出问题，其实还是走的torch的save,在ft里面进行强制修改了
 def save_checkpoint(model, optimizer, path, epoch):
-    torch.save(model, os.path.join(path, 'model_{}.pt'.format(epoch)))
-    torch.save(optimizer.state_dict(), os.path.join(path, 'optimizer_{}.pt'.format(epoch)))
+    jt.save(model, os.path.join(path, 'model_{}.pt'.format(epoch)))
+    jt.save(optimizer.state_dict(), os.path.join(path, 'optimizer_{}.pt'.format(epoch)))
+    # jt.save(optimizer.scheduler.state_dict(), os.path.join(path, 'scheduler_{}.pt'.format(epoch)))
+

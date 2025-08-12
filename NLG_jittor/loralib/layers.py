@@ -2,8 +2,6 @@
 #  Copyright (c) Microsoft Corporation. All rights reserved.
 #  Licensed under the MIT License (MIT). See LICENSE in the repo root for license information.
 #  ------------------------------------------------------------------------------------------
-#  Modified by Weihua, 20250703
-#  -----------------------------------------------------------------------------------------
 import jittor as jt
 from jittor import nn, init
 
@@ -50,12 +48,11 @@ class Embedding(nn.Embedding, LoRALayer):
             self.lora_B = self.weight.new_zeros((embedding_dim, r))
             self.scaling = self.lora_alpha / self.r
             # Freezing the pre-trained weight matrix
-            # self.weight.requires_grad = False
+            # jittor冻结梯度的方法
             self.weight.stop_grad()
         self.reset_parameters()
 
     def reset_parameters(self):
-        # nn.Embedding.reset_parameters(self)
         jittor_reset_parameters(self)
         init.gauss_(self.weight)
         if hasattr(self, 'lora_A'):
@@ -78,21 +75,30 @@ class Embedding(nn.Embedding, LoRALayer):
                     self.weight.data += (self.lora_B @ self.lora_A).transpose(0, 1) * self.scaling
                 self.merged = True
     
-    # Debug: Core difference between torch & Jittor. forward(Torch) <-> execute(Jittor)
-    # Debug: torch.Tensor <-> jt.Var
-    def execute(self, x: jt.Var):
+    #  forward-> execute
+    def execute(self, x):
+        # 索引必须是整型
+        if x.dtype not in (jt.int32, jt.int64):
+            x = x.int32()
+
         if self.r > 0 and not self.merged:
-            result = nn.Embedding.execute(self, x)
-            # classjittor.nn.Embedding(num_embeddings, embedding_dim, padding_idx=None, dtype='float32')
-            after_A = nn.embedding(
-                x, self.lora_A.transpose(0, 1)
-                # self.max_norm,self.norm_type, self.scale_grad_by_freq, self.sparse
-            )
-            result += (after_A @ self.lora_B.transpose(0, 1)) * self.scaling
-            return result
+            # 基础 embedding
+            result = super().execute(x)  # 等价于 nn.Embedding 的前向
+
+            # 等价于 F.embedding(x, lora_A^T)
+            weight_A = self.lora_A.transpose(1, 0)   # [num_embeddings, r]
+            after_A = weight_A[x]                    # [*, r] 按索引查表
+
+            # 可选：处理 padding_idx（把增量置零）
+            if self.padding_idx is not None:
+                pad_mask = (x == self.padding_idx).unsqueeze(-1)   # [*, 1]
+                after_A = jt.where(pad_mask, jt.zeros_like(after_A), after_A)
+
+            # ΔE = after_A @ lora_B^T
+            delta = after_A @ self.lora_B.transpose(1, 0)          # [*, embed_dim]
+            return result + delta * self.scaling
         else:
-            return nn.Embedding.execute(self, x)
-            
+            return super().execute(x)  
 
 class Linear(nn.Linear, LoRALayer):
     # LoRA implemented in a dense layer
@@ -187,16 +193,19 @@ class MergedLinear(nn.Linear, LoRALayer):
         # Actual trainable parameters
         if r > 0 and any(enable_lora):
             # self.lora_A = self.weight.new_zeros((r * sum(enable_lora), in_features))
-            # self.lora_B = self.weight.new_zeros((out_features // len(enable_lora) * sum(enable_lora), r)) # weights for Conv1D with groups=sum(enable_lora)
             self.lora_A = self.weight.new_zeros((int(r * sum(enable_lora)), in_features))
+            # self.lora_B = self.weight.new_zeros((out_features // len(enable_lora) * sum(enable_lora), r)) # weights for Conv1D with groups=sum(enable_lora)
             self.lora_B = self.weight.new_zeros((int(out_features // len(enable_lora) * sum(enable_lora)), r)) # weights for Conv1D with groups=sum(enable_lora)
             
             self.scaling = self.lora_alpha / self.r
             # Freezing the pre-trained weight matrix
             # self.weight.requires_grad = False
-            # Core: requires_grad = False(torch) <-> stop_grad() (Jittor)
             self.weight.stop_grad()
             # Compute the indices
+            # self.lora_ind = self.weight.new_zeros(
+            #     (out_features, ), dtype=torch.bool
+            # ).view(len(enable_lora), -1)
+            # self.lora_ind[enable_lora, :] = True
             self.lora_ind = jt.zeros((out_features,), dtype="bool").view(len(enable_lora), -1)
             self.lora_ind[jt.array(enable_lora), :] = True
             
@@ -207,13 +216,13 @@ class MergedLinear(nn.Linear, LoRALayer):
             self.weight = self.weight.transpose(0, 1)
 
     def reset_parameters(self):
-        # Debug: Jittor not support 'reset_parameters'
         # nn.Linear.reset_parameters(self)
         jittor_reset_parameters(self)
         if hasattr(self, 'lora_A'):
             # initialize A the same way as the default for nn.Linear and B to zero
+            # nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
             init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
-            # Debug: zeros_(torch), zero_(Jittor)
+            # nn.init.zeros_(self.lora_B)
             init.zero_(self.lora_B)
 
     def zero_pad(self, x):
@@ -224,7 +233,7 @@ class MergedLinear(nn.Linear, LoRALayer):
     def merge_AB(self):
         def T(w):
             return w.transpose(0, 1) if self.fan_in_fan_out else w
-
+#ittor 没有完全等价的 F.conv1d：用模块化的 nn.Conv1d 更可控
         conv1d = nn.Conv1d(
             in_channels=self.lora_A.unsqueeze(0).shape[1],
             out_channels=self.lora_B.unsqueeze(-1).shape[0],
@@ -232,14 +241,17 @@ class MergedLinear(nn.Linear, LoRALayer):
             groups=sum(self.enable_lora),
             bias=False
         )
-        conv1d.weight.assign(self.lora_B.unsqueeze(-1))
+        conv1d.weight.assign(self.lora_B.unsqueeze(-1))   # 手动设置权重
+        # 可选：冻结，避免进入优化器（merge_AB 通常用于合并权重而不是训练）
+        conv1d.weight.stop_grad()
+        conv1d.eval()  # 保险起见
+
         delta_w = conv1d(self.lora_A.unsqueeze(0)).squeeze(0)
         return T(self.zero_pad(delta_w))
 
     def train(self, mode: bool = True):
         def T(w):
             return w.transpose(0, 1) if self.fan_in_fan_out else w
-        
         nn.Linear.train(self)
         if mode:
             if self.merge_weights and self.merged:
@@ -262,9 +274,6 @@ class MergedLinear(nn.Linear, LoRALayer):
         else:
             result = nn.linear(x, T(self.weight), bias=self.bias)
             if self.r > 0:
-                # Error:    assert a.shape[-1] == b.shape[-1], (a.shape, b.shape)
-                #           AssertionError: ([8,512,1024,], [1024,3072,])
-                # Debug:  .T -> transpose(0, 1)
                 result += self.lora_dropout(x) @ T(self.merge_AB().transpose(0, 1)) * self.scaling
             return result
 
@@ -282,12 +291,12 @@ class ConvLoRA(nn.Module, LoRALayer):
             self.lora_B = self.conv.weight.new_zeros((out_channels//self.conv.groups*kernel_size, r*kernel_size))
             self.scaling = self.lora_alpha / self.r
             # Freezing the pre-trained weight matrix
-            # self.conv.weight.requires_grad = False
             self.conv.weight.stop_grad()
         self.reset_parameters()
         self.merged = False
 
     def reset_parameters(self):
+        #Jittor里没有现成的 reset_parameters/calculate_fan_in_and_fan_out，需要自己实现一版，见末尾
         jittor_reset_parameters(self)
         if hasattr(self, 'lora_A'):
             # initialize A the same way as the default for nn.Linear and B to zero
@@ -332,33 +341,31 @@ class Conv3d(ConvLoRA):
     def __init__(self, *args, **kwargs):
         super(Conv3d, self).__init__(nn.Conv3d, *args, **kwargs)
 
-# -----------------------------------------------------------------------------------------
-# My Define Jittor
-# -----------------------------------------------------------------------------------------
-def jittor_reset_parameters(self):
-    # 推荐使用 kaiming_uniform_ 做权重初始化
-    init.kaiming_uniform_(self.weight, a=math.sqrt(5))
-
-    if self.bias is not None:
-        fan_in, _ = jittor_calculate_fan_in_and_fan_out(self.weight)
-        bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
-        init.uniform_(self.bias, -bound, bound)
-
-def jittor_calculate_fan_in_and_fan_out(w):
-    # Jittor 实现 PyTorch 里 torch/nn/init.py
-    dimensions = len(w.shape)
-    if dimensions < 2:
-        raise ValueError("Fan in and fan out cannot be computed for tensor with fewer than 2 dimensions")
-
-    num_input_fmaps = w.shape[1]
-    num_output_fmaps = w.shape[0]
+#Jittor里没有现成的 reset_parameters/calculate_fan_in_and_fan_out，需要自己实现一版
+# 计算 fan_in / fan_out（线性 & conv 通用）
+def jittor_calculate_fan_in_and_fan_out(w: jt.Var):
+    dims = len(w.shape)
+    if dims < 2:
+        raise ValueError("Fan in/out 需要 tensor 至少 2 维")
+    # 约定权重布局与 PyTorch 一致：
+    # Linear: [out_features, in_features]
+    # ConvNd: [out_channels, in_channels // groups, *kernel_size]
+    num_output_fmaps = int(w.shape[0])
+    num_input_fmaps  = int(w.shape[1])
     receptive_field_size = 1
-
-    if dimensions > 2:
+    if dims > 2:
         for s in w.shape[2:]:
-            receptive_field_size *= s
-
-    fan_in = num_input_fmaps * receptive_field_size
+            receptive_field_size *= int(s)
+    fan_in  = num_input_fmaps  * receptive_field_size
     fan_out = num_output_fmaps * receptive_field_size
-
     return fan_in, fan_out
+
+# 通用的 reset_parameters（Linear/Conv）
+def jittor_reset_parameters(module: nn.Module):
+    # 权重：Kaiming Uniform，与 PyTorch Linear/Conv 默认一致
+    init.kaiming_uniform_(module.weight, a=math.sqrt(5))
+    # 偏置：U(-bound, bound)，bound = 1/sqrt(fan_in)
+    if getattr(module, "bias", None) is not None:
+        fan_in, _ = jittor_calculate_fan_in_and_fan_out(module.weight)
+        bound = 1.0 / math.sqrt(fan_in) if fan_in > 0 else 0.0
+        init.uniform_(module.bias, -bound, bound)

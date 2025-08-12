@@ -2,9 +2,6 @@
 #  Copyright (c) Microsoft Corporation. All rights reserved.
 #  Licensed under the MIT License (MIT). See LICENSE in the repo root for license information.
 #  ------------------------------------------------------------------------------------------
-#  Weihua Modified (checked 250705)
-#  ------------------------------------------------------------------------------------------
-
 import jittor as jt
 from jittor import nn
 
@@ -12,11 +9,12 @@ from typing import Dict
 
 from .layers import LoRALayer
 
-# Debug: jt.Moudel!! instead of nn.Module
+#nn.Module->jt.Module
 def mark_only_lora_as_trainable(model: jt.Module, bias: str = 'none') -> None:
     for n, p in model.named_parameters():
         if 'lora_' not in n:
-            # p.requires_grad = False
+            # p.requires_grad = False 布尔属性，控制这个参数是否在反向传播时计算梯度
+            #Jittor 提供了 方法,p.stop_grad() → 冻结梯度
             p.stop_grad()
     if bias == 'none':
         return
@@ -31,11 +29,11 @@ def mark_only_lora_as_trainable(model: jt.Module, bias: str = 'none') -> None:
                 hasattr(m, 'bias') and \
                 m.bias is not None:
                     # m.bias.requires_grad = True
-                    m.bias.start_grad()
+                    m.bias.start_grad()#p.start_grad() → 解冻梯度
     else:
         raise NotImplementedError
 
-# Debug: Core of Jittor load .bin!!! -> jt.Var
+# torch.Tensor->jt.Var
 def lora_state_dict(model: nn.Module, bias: str = 'none') -> Dict[str, jt.Var]:
     my_state_dict = model.state_dict()
     if bias == 'none':

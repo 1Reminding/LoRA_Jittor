@@ -10,22 +10,15 @@ import json
 import itertools
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
-import torch
-from torch import Tensor, device, dtype, nn
-from torch.nn import CrossEntropyLoss
-from torch.nn import functional as F
-from torch.utils.data import DataLoader
-import torch.nn.functional as F
-torch.set_printoptions(threshold=100000)
+import jittor as jt
+from jittor import nn, Var
+from jittor.dataset import DataLoader
 
 import numpy as np
 
 from gpu import (
     add_gpu_params, 
     parse_gpu, 
-    distributed_opt, 
-    distributed_gather, 
-    distributed_sync, 
     cleanup
 )
 
@@ -35,7 +28,7 @@ from data_utils import FT_Dataset
 from model import GPT2Config, GPT2LMModel
 
 
-parser = argparse.ArgumentParser(description='PyTorch GPT2 beam decoding')
+parser = argparse.ArgumentParser(description='jittor GPT2 beam decoding')
 
 add_gpu_params(parser)
 
@@ -89,10 +82,15 @@ def print_args(args):
         print('=' * 100)
 
 
-def _reorder_cache(past: Tuple, beam_idx: Tensor) -> Tuple[Tensor]:
-    return tuple(layer_past.index_select(1, beam_idx).contiguous().detach() for layer_past in past)
-
-
+# def _reorder_cache(past: Tuple, beam_idx: Val) -> Tuple[Any,...]:
+#     return tuple(layer_past[:, beam_idx] for layer_past in past)
+#如果 past 里是 HuggingFace 那种 (key, value) 格式，每层都会有一个 tuple 存注意力的 key 和 value，那必须对 key 和 value 都做 beam 重排，否则模型生成会错乱。
+#如果 past 里是单个 jt.Var，这个分支会走到 else p[:, beam_idx]
+def _reorder_cache(past: Tuple, beam_idx: jt.Var) -> Tuple[Any, ...]:
+    return tuple(
+        (p[0][:, beam_idx], p[1][:, beam_idx]) if isinstance(p, (tuple, list)) else p[:, beam_idx]
+        for p in past
+    )
 def _calc_banned_ngram_tokens(
     prev_input_ids: Tensor, 
     num_hypos: int, 
@@ -209,7 +207,7 @@ def beam(model, data_iter, args):
     start_time = time.time()
 
     all_predictions = {}
-    with torch.no_grad():
+    with jt.no_grad():
         for idx, data in enumerate(data_iter):
             data = {key: value for key, value in data.items()}
 
@@ -229,7 +227,8 @@ def beam(model, data_iter, args):
             num_beams = args.beam
             length_penalty = args.length_penalty
 
-            _batch = torch.arange(0, _id.size(0), device=args.device, dtype=torch.long)
+            # _batch = torch.arange(0, _id.size(0), device=args.device, dtype=torch.long)
+            _batch = jt.arange(0, _id.size(0))
             
             past = None
             len_past = None
@@ -240,17 +239,22 @@ def beam(model, data_iter, args):
             _bbatch = _batch.unsqueeze(-1).repeat(1, num_beams).view(-1)
             
             # scores for each sentence in the beam
-            beam_scores = torch.zeros(
-                (batch_size, num_beams), dtype=torch.float, device=_query.device
+            # beam_scores = torch.zeros(
+            #     (batch_size, num_beams), dtype=torch.float, device=_query.device
+            # )
+            beam_scores = jt.zeros(
+                (batch_size, num_beams)
             )
-
-            best_sequence = torch.zeros(
-                (batch_size, args.eval_len), dtype=torch.long, device=_query.device
+            # best_sequence = torch.zeros(
+            #     (batch_size, args.eval_len), dtype=torch.long, device=_query.device
+            # )
+            best_sequence = jt.zeros(
+                (batch_size, args.eval_len)
             )
             best_score = {}
 
             history = None
-            with torch.no_grad():
+            with jt.no_grad():
                 for i in range(0, args.eval_len):
                     if i == 0:
                         logits, past = model(_query) 
@@ -281,7 +285,7 @@ def beam(model, data_iter, args):
                     vocab_size = softmax_probs.shape[-1] 
                     
 
-                    _logprob = torch.log(softmax_probs) # batch_size * beam, vocab
+                    _logprob = jt.log(softmax_probs) # batch_size * beam, vocab
                     if i == 0:
                         next_scores = _logprob.view(batch_size, num_beams, -1)[:, 0, :] # batch_size, vocab
                         
@@ -289,7 +293,7 @@ def beam(model, data_iter, args):
                         next_scores = beam_scores.unsqueeze(-1) + _logprob.view(batch_size, num_beams, -1)
                         next_scores = next_scores.view(batch_size, -1) # batch_size, beam * vocab
 
-                    next_scores, next_tokens = torch.topk(
+                    next_scores, next_tokens = jt.topk(
                         next_scores, num_beams, dim=1, largest=True, sorted=True
                     )     # batch_size, num_beams
                     
@@ -304,8 +308,8 @@ def beam(model, data_iter, args):
                     if history is None:
                         history = token_id.detach()
                     else:
-                        history = torch.cat((history[beam_idx.view(-1)], token_id.detach()), dim=1).detach()
-
+                        # history = torch.cat((history[beam_idx.view(-1)], token_id.detach()), dim=1).detach()
+                        history = jt.concat((history[beam_idx.view(-1)], token_id.detach()), dim=1).detach()
                     _add_beam_candidate(
                         best_score, best_sequence, batch_size, num_beams, beam_scores, history, 
                         eos_token_id=args.eos_token_id
@@ -316,13 +320,15 @@ def beam(model, data_iter, args):
                 )
 
 
-            with torch.no_grad():
-                _id = distributed_gather(args, _id)
-                output = distributed_gather(args, best_sequence)
+            with jt.no_grad():#注意下面的修改只适用于单卡
+                #单卡没有其它 rank，best_sequence 就是全量本地结果，直接用即可
+                # _id = distributed_gather(args, _id)
+                output = best_sequence
                 #score = distributed_gather(args, score)
-                distributed_sync(args)
+                # distributed_sync(args)
 
-            if args.rank == 0:
+            # if args.rank == 0:
+            #只有一张卡/一个进程，这个判断恒为真
                 _id = _id.view(-1).cpu()
                 output = output.view(-1, output.shape[-1]).cpu()
                 #score = score.view(-1, score.shape[-1]).cpu()
@@ -337,7 +343,7 @@ def beam(model, data_iter, args):
                 if idx % 10 == 0:
                     print('inference samples', idx)
 
-    if args.rank == 0:
+    # if args.rank == 0:
         pred_file = os.path.join(args.work_dir, args.output_file) 
         print('saving prediction file', pred_file)
         with open(pred_file, 'w') as writer:
@@ -347,7 +353,7 @@ def beam(model, data_iter, args):
 
 if __name__ == '__main__':
     args = parser.parse_args()
-    parse_gpu(args)
+    # parse_gpu(args)
     print_args(args)
     
     if args.rank == 0:
@@ -381,12 +387,13 @@ if __name__ == '__main__':
     lm_net = GPT2LMModel(config)
     if args.init_checkpoint is not None:
         print('loading model pretrained weight.')
-        cp = torch.load(args.init_checkpoint, map_location=torch.device('cpu'))
+        # cp = torch.load(args.init_checkpoint, map_location=torch.device('cpu'))
+        cp = jt.load(args.init_checkpoint)
         lm_net.load_weight(cp)    
     lm_net = lm_net.cuda()
 
     print('model sampling ...')
     beam(lm_net, valid_loader, args)
-    distributed_sync(args)
+    # distributed_sync(args)
     print('cleanup dist ...')
     cleanup(args)
