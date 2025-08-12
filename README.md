@@ -46,8 +46,8 @@ PS:如果计算资源有限，用少量数据的训练效果和pytorch版本的�
 | --------------------------------------- | --------------- |
 | [Overview](#overview)                      |                 |
 | [Experiment](#experiment)                  | 环境配置，实验设计，注意事项  |
-| [Train/Eval Log](#log--performance) | 日志、运行结果  |
-| [Performance Comparison](#other-performance)    | 性能对比    |
+| [Train/Eval Log](#traineval-log) | 日志、运行结果  |
+| [Performance Comparison](#performance-comparison)    | 性能对比    |
 | [Jittor Alignment](#jittor-alignment)        | Jittor 架构实现 |
 | [Reference](#reference)                    |                 |
 | [Citation](#citation)                      |                 |
