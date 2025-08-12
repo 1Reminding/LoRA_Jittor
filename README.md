@@ -18,8 +18,8 @@ $$
   W' = W + BA
 $$
 
-  其中 $A \in \mathbb{R}^{r\times k}$ 、 $B \in \mathbb{R}^{d\times r}$ ，秩 $r \ll \min(d,k)$ 。  
-- 冻结原有权重，仅训练新增的低秩矩阵 $A$ 、$B$ 。  
+- 其中 $A \in \mathbb{R}^{r\times k}$ 、 $B \in \mathbb{R}^{d\times r}$ ，秩 $r \ll \min(d,k)$ 。  
+- 冻结原有权重，仅训练新增的低秩矩阵 $A$ 、 $B$ 。  
 
 2. 优势  
 - **参数高效**：大幅减少可训练参数量，通常降低至全量微调的 $0.1\%\sim1\%$ 。  
