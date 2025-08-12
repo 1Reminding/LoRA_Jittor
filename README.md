@@ -35,10 +35,10 @@ PS:如果计算资源有限，用少量数据的训练效果和pytorch版本的�
 
 * [X] [环境配置](#environment)
 * [X] [数据准备脚本](#data-prepare)
-* [X] [训练脚本](#seperate-steps)
-* [X] [测试脚本](#seperate-steps)
-* [X] [jittor与pytorch实现对齐的实验log](#log)
-* [X] [性能Log](#log)
+* [X] [训练脚本](#run)
+* [X] [测试脚本](#run)
+* [X] [性能Log](#traineval-log)
+* [X] [jittor与pytorch实现对齐的实验log](#performance-comparison)
 
 ## Content
 
