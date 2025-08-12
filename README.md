@@ -443,9 +443,11 @@ start to train the model................ 3
 torch版本
 
 <img src="img\training_curves_pytorch.png" alt="torch版本训练曲线" width="800">
+
 可以观察到在500step之前就已经趋于收敛，loss稳定在2.5左右，PPL 稳定下降并趋于平稳，说明模型已经收敛，而且没有明显过拟合。
 
 jittor版本：
+
 <img src="img\training_curves_jittor.png" alt="jittor版本训练曲线" width="800">
 
 将 torch, Jittor 的数据绘制在同一张图表，可以观察到avg_loss基本重合，说明实现了**性能对齐**，单步的loss出现不同的波动，属于正常现象。
