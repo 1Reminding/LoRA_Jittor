@@ -6,9 +6,9 @@
 > Github: https://github.com/microsoft/LoRA <br>
 
 LoRA（Low-Rank Adaptation）是一种高效的预训练模型微调方法，旨在在保持模型性能的同时显著降低训练开销。  
-<p>
-<img src="img/lora.jpg" center="center" alt="lora" width="250" >
-</p>
+<div align="center">
+  <img src="img/lora.jpg" alt="lora" width="250">
+</div>
 
 1. 实现方式  
 - 在模型的部分权重矩阵（如注意力层的 $W_q$、$W_v$）引入低秩分解结构。  
@@ -47,7 +47,6 @@ PS:如果计算资源有限，用少量数据的训练效果和pytorch版本的�
 | [Train/Eval Log](#log--performance) | 日志、运行结果  |
 | [Performance Comparison](#other-performance)    | 性能对比    |
 | [Jittor Alignment](#jittor-alignment)        | Jittor 架构实现 |
-| [Debug](#debug)                            | 常见问题及解决方案 |
 | [Reference](#reference)                    |                 |
 | [Citation](#citation)                      |                 |
 
@@ -83,7 +82,7 @@ PS:如果计算资源有限，用少量数据的训练效果和pytorch版本的�
 由于官方文档代码实现非常完整，复现过程中环境配置是保证代码运行的前提，下面是你在环境配置中可以参考的一些信息：
 
 1. 安装 transformer 遇到 tokenizer rust编译的问题
-<img src="img/tokenizer.jpg" alt="安装transformer遇到tokenizer rust编译的问题" width="400">
+<img src="img/tokenizer.jpg" alt="安装transformer遇到tokenizer rust编译的问题" width="800">
 解决方案一（肯定能奏效）：
 
 安装transformers 3.3.1但不安装其依赖，然后我们手动安装除tokenizers外的其他依赖。
@@ -375,254 +374,216 @@ ATTENTION: 原代码的逻辑已经在终端输出记录详细的 Log，注意�
 
 ## Train/Eval Log
 
-下面展示torch和jittor版本的性能，以及对齐性能log （完整文件位于两个框架文件夹的）。 
+下面展示torch和jittor版本的性能，以及对齐性能log （完整文件位于两个框架文件夹的trained_models/GPT2_M/...下）。 
 
 ### dataset: e2e
 
-截取部分训练过程记录的 log 展示如下，完整 log 记录查看 [log/replication-torch/e2e](log/replication-torch)：
+部分训练 log 展示如下：
+torch 版本
 
-```
-====================================================================================================
-Experiment dir : ./trained_models_jittor/GPT2_M/e2e
-loading model pretrained weight.
-set max_step: 5000
-start to train the model................ 1
-/root/LoRA/examples/NLG/src_jittor/gpt2_ft.py:214: DeprecationWarning: Conversion of an array with ndim > 0 to a scalar is deprecated, and will error in future. Ensure you extract a single element from your array before performing this operation. (Deprecated NumPy 1.25.)
-  avg_lm_loss.update(float(_lm_loss.data))
-| epoch   1 step      100 |    100 batches | lr 4e-05 | ms/batch 544.36 | loss  4.56 | avg loss  5.60 | ppl 270.78
-| epoch   1 step      200 |    200 batches | lr 8e-05 | ms/batch 541.69 | loss  3.26 | avg loss  3.80 | ppl 44.50
-| epoch   1 step      300 |    300 batches | lr 0.00012 | ms/batch 542.20 | loss  2.94 | avg loss  3.16 | ppl 23.64
-| epoch   1 step      400 |    400 batches | lr 0.00016 | ms/batch 542.96 | loss  2.51 | avg loss  2.97 | ppl 19.58
-| epoch   1 step      500 |    500 batches | lr 0.0002 | ms/batch 543.07 | loss  3.73 | avg loss  2.93 | ppl 18.68
-| epoch   1 step      600 |    600 batches | lr 0.000196 | ms/batch 544.30 | loss  2.74 | avg loss  2.88 | ppl 17.80
-| epoch   1 step      700 |    700 batches | lr 0.000191 | ms/batch 542.84 | loss  3.09 | avg loss  2.87 | ppl 17.68
-| epoch   1 step      800 |    800 batches | lr 0.000187 | ms/batch 543.30 | loss  2.95 | avg loss  2.84 | ppl 17.18
-| epoch   1 step      900 |    900 batches | lr 0.000182 | ms/batch 543.63 | loss  3.29 | avg loss  2.88 | ppl 17.74
-| epoch   1 step     1000 |   1000 batches | lr 0.000178 | ms/batch 543.98 | loss  2.82 | avg loss  2.77 | ppl 15.97
-saving checkpoint ./trained_models_jittor/GPT2_M/e2e/model.1000.pt
-eval samples: 0 loss: jt.Var([1.3142258], dtype=float32)
-eval samples: 100 loss: jt.Var([1.2512419], dtype=float32)
-average loss 1.4265571147203446
+```bash
+eval samples: 400 loss: tensor(1.0887, device='cuda:0')
+average loss 1.364281438220115
 ----------------------------------------------------------------------------------------------------
-| Eval   1 at step     1000 | time: 25.58s | valid loss  1.43 | valid ppl  4.16 | best ppl  4.16 
+| Eval   1 at step     2000 | time: 35.43s | valid loss  1.36 | valid ppl  3.91 | best ppl  3.91 
 ----------------------------------------------------------------------------------------------------
-saving checkpoint ./trained_models_jittor/GPT2_M/e2e/model.1000.pt
+| epoch   2 step     2100 |    207 batches | lr 0.000164 | ms/batch 728.20 | loss  2.57 | avg loss  2.67 | ppl 14.51
+| epoch   2 step     2200 |    307 batches | lr 0.000162 | ms/batch 371.82 | loss  2.47 | avg loss  2.68 | ppl 14.59
+| epoch   2 step     2300 |    407 batches | lr 0.00016 | ms/batch 372.78 | loss  2.73 | avg loss  2.64 | ppl 14.05
+| epoch   2 step     2400 |    507 batches | lr 0.000158 | ms/batch 374.93 | loss  2.44 | avg loss  2.69 | ppl 14.80
+| epoch   2 step     2500 |    607 batches | lr 0.000155 | ms/batch 374.52 | loss  2.84 | avg loss  2.70 | ppl 14.86
+| epoch   2 step     2600 |    707 batches | lr 0.000153 | ms/batch 368.80 | loss  2.40 | avg loss  2.68 | ppl 14.57
+| epoch   2 step     2700 |    807 batches | lr 0.000151 | ms/batch 374.33 | loss  2.30 | avg loss  2.67 | ppl 14.50
+| epoch   2 step     2800 |    907 batches | lr 0.000149 | ms/batch 374.06 | loss  2.94 | avg loss  2.65 | ppl 14.21
+| epoch   2 step     2900 |   1007 batches | lr 0.000146 | ms/batch 371.49 | loss  2.70 | avg loss  2.66 | ppl 14.26
+| epoch   2 step     3000 |   1107 batches | lr 0.000144 | ms/batch 373.31 | loss  2.54 | avg loss  2.68 | ppl 14.55
+saving checkpoint /root/autodl-tmp/trained_models/GPT2_M/e2e/model.3000.pt
+| epoch   2 step     3100 |   1207 batches | lr 0.000142 | ms/batch 372.96 | loss  2.46 | avg loss  2.65 | ppl 14.20
+| epoch   2 step     3200 |   1307 batches | lr 0.00014 | ms/batch 372.59 | loss  2.77 | avg loss  2.66 | ppl 14.24
+| epoch   2 step     3300 |   1407 batches | lr 0.000138 | ms/batch 373.02 | loss  3.04 | avg loss  2.61 | ppl 13.62
+| epoch   2 step     3400 |   1507 batches | lr 0.000135 | ms/batch 372.70 | loss  2.93 | avg loss  2.66 | ppl 14.27
+| epoch   2 step     3500 |   1607 batches | lr 0.000133 | ms/batch 372.64 | loss  2.56 | avg loss  2.63 | ppl 13.85
+| epoch   2 step     3600 |   1707 batches | lr 0.000131 | ms/batch 372.86 | loss  2.44 | avg loss  2.62 | ppl 13.70
+| epoch   2 step     3700 |   1807 batches | lr 0.000129 | ms/batch 373.10 | loss  2.32 | avg loss  2.67 | ppl 14.41
+saving checkpoint /root/autodl-tmp/trained_models/GPT2_M/e2e/model.3786.pt
+start to train the model................ 3
 ```
-
+jittor 版本
+```bash
+eval samples: 400 loss: jt.Var([1.4633853], dtype=float32)
+average loss 1.3697681188583375
+----------------------------------------------------------------------------------------------------
+| Eval   1 at step     2000 | time: 62.58s | valid loss  1.37 | valid ppl  3.93 | best ppl  3.93 
+----------------------------------------------------------------------------------------------------
+| epoch   2 step     2100 |    207 batches | lr 0.000164 | ms/batch 1167.23 | loss  2.52 | avg loss  2.70 | ppl 14.94
+| epoch   2 step     2200 |    307 batches | lr 0.000162 | ms/batch 539.79 | loss  2.97 | avg loss  2.74 | ppl 15.42
+| epoch   2 step     2300 |    407 batches | lr 0.00016 | ms/batch 543.69 | loss  2.65 | avg loss  2.68 | ppl 14.55
+| epoch   2 step     2400 |    507 batches | lr 0.000158 | ms/batch 538.26 | loss  2.93 | avg loss  2.66 | ppl 14.30
+| epoch   2 step     2500 |    607 batches | lr 0.000155 | ms/batch 540.69 | loss  2.71 | avg loss  2.71 | ppl 15.01
+| epoch   2 step     2600 |    707 batches | lr 0.000153 | ms/batch 540.72 | loss  2.60 | avg loss  2.69 | ppl 14.76
+| epoch   2 step     2700 |    807 batches | lr 0.000151 | ms/batch 542.45 | loss  3.14 | avg loss  2.65 | ppl 14.15
+| epoch   2 step     2800 |    907 batches | lr 0.000149 | ms/batch 542.87 | loss  2.37 | avg loss  2.68 | ppl 14.61
+| epoch   2 step     2900 |   1007 batches | lr 0.000146 | ms/batch 541.74 | loss  2.49 | avg loss  2.65 | ppl 14.20
+| epoch   2 step     3000 |   1107 batches | lr 0.000144 | ms/batch 541.19 | loss  2.60 | avg loss  2.63 | ppl 13.93
+saving checkpoint /root/autodl-tmp/trained_models/GPT2_M/e2e_jittor/model.3000.pt
+| epoch   2 step     3100 |   1207 batches | lr 0.000142 | ms/batch 542.25 | loss  2.79 | avg loss  2.67 | ppl 14.51
+| epoch   2 step     3200 |   1307 batches | lr 0.00014 | ms/batch 540.94 | loss  2.46 | avg loss  2.63 | ppl 13.83
+| epoch   2 step     3300 |   1407 batches | lr 0.000138 | ms/batch 540.62 | loss  2.86 | avg loss  2.65 | ppl 14.20
+| epoch   2 step     3400 |   1507 batches | lr 0.000135 | ms/batch 540.87 | loss  2.31 | avg loss  2.65 | ppl 14.10
+| epoch   2 step     3500 |   1607 batches | lr 0.000133 | ms/batch 540.97 | loss  2.52 | avg loss  2.65 | ppl 14.16
+| epoch   2 step     3600 |   1707 batches | lr 0.000131 | ms/batch 540.57 | loss  2.71 | avg loss  2.59 | ppl 13.37
+| epoch   2 step     3700 |   1807 batches | lr 0.000129 | ms/batch 540.99 | loss  2.98 | avg loss  2.60 | ppl 13.44
+saving checkpoint /root/autodl-tmp/trained_models/GPT2_M/e2e_jittor/model.3786.pt
+start to train the model................ 3
+```
 #### Alignment
 
-分别展示 torch 和 Jittor 训练过程的 loss, avg_loss, valid_loss。可以观察到 500 步左右，基本收敛，训练loss最终保持在2.6左右。
+下图展示 torch 和 Jittor 训练过程的 loss, avg_loss, valid_loss; PPL;Learning rate;smooth loss。
 
-<p>
-<img src="figure/loss/loss_e2e.png" style="width:600; display: block; margin: 0 auto;">
-</p>
+torch版本
 
-将 torch, Jittor 的数据绘制在同一张图表，可以观察到avg_loss**基本重合**，说明实现了**性能对齐**，单步的loss出现不同的波动，属于正常现象。
+<img src="img\training_curves_pytorch.png" alt="torch版本训练曲线" width="800">
+可以观察到在500step之前就已经趋于收敛，loss稳定在2.5左右，PPL 稳定下降并趋于平稳，说明模型已经收敛，而且没有明显过拟合。
 
-<p>
-<img src="figure/loss/all_loss_e2e.png" style="width:600; display: block; margin: 0 auto;">
-</p>
+jittor版本：
+<img src="img\training_curves_jittor.png" alt="jittor版本训练曲线" width="800">
+
+将 torch, Jittor 的数据绘制在同一张图表，可以观察到avg_loss基本重合，说明实现了**性能对齐**，单步的loss出现不同的波动，属于正常现象。
+
+<img src="img\training_comparison_6000.png" alt="jittor和torch版本训练曲线对比" width="800">
 
 #### Evaluation
 
 运行评价指标函数，对齐性能，Evaluate 运算过程 log 如下：
 
-```
+torch 版本：
+
+```bash
 Running MS-COCO evaluator...
 creating index...
 index created!
-Loading and preparing results...   
+Loading and preparing results...     
 DONE (t=0.00s)
 creating index...
 index created!
 tokenization...
-PTBTokenizer tokenized 8906 tokens at 88235.44 tokens per second.
-PTBTokenizer tokenized 1065 tokens at 16000.19 tokens per second.
+PTBTokenizer tokenized 24031 tokens at 130248.83 tokens per second.
+PTBTokenizer tokenized 13777 tokens at 114238.69 tokens per second.
 setting up scorers...
 computing METEOR score...
-METEOR: 0.471
+METEOR: 0.395
 computing Rouge score...
-ROUGE_L: 0.741
+ROUGE_L: 0.624
 computing CIDEr score...
-CIDEr: 3.162
+CIDEr: 2.900
 Running Py-MTEval metrics...
+Completed evaluation .
 SCORES:
 ==============
-BLEU: 0.6942
-NIST: 8.0840
-METEOR: 0.4708
-ROUGE_L: 0.7408
-CIDEr: 3.1612
+BLEU: 0.6684
+NIST: 0.7506
+METEOR: 0.3953
+ROUGE_L: 0.6242
+CIDEr: 0.2900
 ```
+jittor 版本：
+```bash
+Running MS-COCO evaluator...
+creating index...
+index created!
+Loading and preparing results...     
+DONE (t=0.00s)
+creating index...
+index created!
+tokenization...
+PTBTokenizer tokenized 24031 tokens at 143112.14 tokens per second.
+PTBTokenizer tokenized 13493 tokens at 94791.60 tokens per second.
+setting up scorers...
+computing METEOR score...
+METEOR: 0.391
+computing Rouge score...
+ROUGE_L: 0.628
+computing CIDEr score...
+CIDEr: 0.304
+Running Py-MTEval metrics...
+Completed evaluation .
+SCORES:
+==============
+BLEU: 0.6714
+NIST: 0.7517
+METEOR: 0.3908
+ROUGE_L: 0.6285
+CIDEr: 0.2943
+```
+由于固定了随机种子，保证了结果的可复现性，总体对比看来，torch和jittor的性能对齐，但是jittor的性能略好于torch。
 
-注意，每次实验存在一定的误差，图表中最终展示的结果是多次实验取平均的结果。
+| Dataset1: e2e | BLEU   | NIST   | METEOR | ROUGE_L | CIDEr   |
+|---------------|--------|--------|--------|---------|---------|
+| torch         | 0.6684 | 0.7504 | **0.3953**| 0.6242  | 0.2900 |
+| Jittor        | **0.6714** | **0.7517** | 0.3908 | **0.6285** | **0.2943** |
 
-观察到整体性能保持一致，Jittor的实验性能略好于torch，bias在2%左右。
-
-<p align="center">
-<img src="figure/sheet/d1-e2e.png" width=600>
-</p>
-
-绘制图表，更直观展示上述表格中的性能对比。
-
-<p align="center">
-<img src="figure/compare/d1-e2e.png" width=600>
-</p>
-
-### dataset2: webnlg
-
-完整 log 记录查看 [log/replication-torch/webnlg](log/replication-torch/webnlg)：
-
-#### Alignment
-
-观察到 500 步左右，基本收敛，训练loss最终保持在2.0左右。
-
-设定的是1000 step进行一次 eval，由于 webnlg 数据集本身数据量比较少，所以很早就结束训练。
-
-<p>
-<img src="figure/loss/loss_webnlg.png" style="width:600; display: block; margin: 0 auto;">
-</p>
-
-将 torch, Jittor 的数据绘制在同一张图表，可以观察到avg_loss**基本重合**，说明实现了**性能对齐**，单步的loss出现不同的波动，属于正常现象。
-
-<p>
-<img src="figure/loss/all_loss_webnlg.png" style="width:600; display: block; margin: 0 auto;">
-</p>
-
-#### Evaluation
-
-运行评价指标函数，对齐性能。观察到整体性能保持一致，Jittor的实验性能略差于torch，bias在3%左右。
-
-<p align="center">
-<img src="figure/sheet/d2-webnlg.png" width=600>
-</p>
-
-绘制图表，更直观展示上述表格中的性能对比。
-
-<p align="center">
-<img src="figure/compare/d2-webnlg.png" width=600>
-</p>
-
-### dataset3: dart
-
-完整 log 记录查看 [log/replication-torch/dart](log/replication-torch/webnlg)：
-
-#### Alignment
-
-观察到 2000 步左右，基本收敛，训练loss最终保持在2.7左右。
-
-<p>
-<img src="figure/loss/loss_dart.png" style="width:600; display: block; margin: 0 auto;">
-</p>
-
-将 torch, Jittor 的数据绘制在同一张图表，可以观察到avg_loss**基本重合**，说明实现了**性能对齐**，单步的loss出现不同的波动，属于正常现象。
-
-<p>
-<img src="figure/loss/all_loss_dart.png" style="width:600; display: block; margin: 0 auto;">
-</p>
-
-#### Evaluation
-
-运行评价指标函数，对齐性能。观察到整体性能保持一致，Jittor的实验性能略差于torch，bias在3%左右。
-
-<p align="center">
-<img src="figure/sheet/d3-dart.png" width=600>
-</p>
-
-绘制图表，更直观展示上述表格中的性能对比。
-
-<p align="center">
-<img src="figure/compare/d3-dart.png" width=600>
-</p>
-
-### Summary
-
-总结整体实验流程的记录，对齐 Jittor 与 torch 性能，保持训练参数完全一致。
-
-综合多次实验取平均，train 过程 loss 下降趋势与随 step 的对应变化基本一致，整体的 evaluation 结果互有高低，bias 不超过5%。
-
-综上，可以认为基本实现了 Jittor-torch 的性能对齐。
-
-#### Alignment
-
-<p align="center">
-  <img src="figure/loss/all_loss_e2e.png" width="300" style="margin-right: 20px;">
-  <img src="figure/loss/all_loss_webnlg.png" width="300" style="margin-right: 20px;">
-  <img src="figure/loss/all_loss_dart.png" width="300">
-</p>
-
-#### Evaluation
-
-<p align="center">
-  <img src="figure/compare/d1-e2e.png" width="300" style="margin-right: 20px;">
-  <img src="figure/compare/d2-webnlg.png" width="300" style="margin-right: 20px;">
-  <img src="figure/compare/d3-dart.png" width="300">
-</p>
-
-## Other Performance
-
-在主体实验训练、评估过程的记录之外，重点关注GPU显存占用，以及整体运行时间。
-
-### GPU utilization
-
-实验运行环境是单卡 RTX3090 24G，可以缩小数据规模后，按照官方仓库的参数配置复现实验。
-
-`PROBLEM: 但是使用 Jittor 后同样参数运行，出现 OOM 的报错。`
-
-<p align="center">
-<img src="figure/sheet/gpu_utilization.png" width=600>
-</p>
-
-
-下面绘制图表，更直观展示上述表格内容。
-
-<p align="center">
-  <img src="figure/compare/gpu_utilization_rate.png" width="300" >
-  <img src="figure/compare/pie.png" width="300">
-</p>
-
-综合收集的信息，切换不同的任务，不会对显存占用造成影响。整体实验参数的 batch_size 比较关键。
-
-`IMPORTANT: 本仓库的实验观察，训练阶段(train) Jittor 显存占用高于 torch, 推理阶段(inference) Jittor 显存占用要低于 torch`
-
-这就解释了原参数配置为什么 Jittor 会 OOM, torch 的实验已经基本达到 24G 的临界上限。Jittor 占用又高于 torch。
-
-### Runtime
-
-下述表格记录以分钟(min)为单位的训练、推理运行时间，出于简便，略去了秒的单位，但在log中可以找到详细的时间记录。
-
-<p align="center">
-<img src="figure/sheet/runtime.png" width="600" >
-</p>
-
-下面绘制图表，更直观展示上述表格内容。
-
-<p align="center">
-<img src="figure/compare/runtime.png" width="600">
-</p>
-
-直观观察到，在本仓库的复现实验的实际表现中，Jittor 的运行效率要低于 torch。
 
 ## Jittor Alignment‌
 
 ### 主要方法
 
-1. 包文件导入，所有包含 torch 的地方直接替换成 Jittor
-   ```
-   # import torch
-   # import torch.nn as nn
-   import Jittor as Jt
-   from Jittor import nn
-   ```
-2. tensor(torch) 替换成 Var(Jittor)
-3. 模型结构中的forward(torch) 替换成 exexcute(Jittor)
-4. 冻结参数，不计算梯度：**requires_grad=False** 替换成 **stop_grad()**
-5. Other: 具体的函数接口替换，检索[6]官方的API文档。包括但不限于：
-   * dataset, dataloader
-   * 矩阵初始化
-   * dtype
-   * ...
-   
+
+1. **导入不是简单 1:1 全替换**
+   - 正确：`import jittor as jt; from jittor import nn, init, optim`
+   - 把所有 `torch.xxx` 机械地替成 `jittor.xxx`。Jittor 的模块划分与命名并不完全对齐，很多函数名/位置不同。
+
+2. **前向函数名**
+   - Jittor 的 `nn.Module` 里用 `execute(self, x)`（不是 `forward`）。
+
+3. **参数的“可训练/冻结”方式**
+   - 在 Jittor 里，参数一般用 `jt.randn/zeros/...` 创建后**显式开启梯度**：`var.start_grad()`；冻结用 `var.stop_grad()`。
+   - PyTorch 的 `requires_grad=True/False` 不存在；不要在 Jittor 里写这个。
+
+4. **反向与优化器调用**
+   - 推荐用 **`optimizer.step(loss)`** 一步完成反传+更新（Jittor 项目普遍这么写）。示例：
+     ```python
+     loss = criterion(logits, labels)
+     optimizer.step(loss)  # 计算梯度并更新
+     ```
+     参考：Jittor 官方示例/社区项目（如 ssd-jittor 的训练脚本）都使用 optimizer.step(loss)。
+
+   - 也可用两步式：
+     ```python
+     optimizer.backward(loss)
+     optimizer.step()
+     optimizer.zero_grad()
+     ```
+
+5. **保存/加载模型（避免触发 PyTorch 依赖）**
+   - **整模保存**：`model.save(path)` / `model.load(path)`（Jittor 自带，不会去 import torch）。示例见 ssd-jittor：model.save('model_best.pkl')。
+   - 仅存权重：**可用 `jt.save(model.state_dict(), path)`，但若走到 jittor 的“save_pytorch”分支会尝试 import torch，所以更稳妥的是用 model.save 保存。**
+   - 小检查点（LoRA 参数）用 `np.savez` 或 `pickle` 存字典，大检查点用 `model.save`
+
+6. **设备与 no-grad**
+   - 设备通常通过` jt.flags.use_cuda = 1` 打开 GPU；不需要像 PyTorch 那样到处 `.to(device)`
+   - 评估期禁梯度：`with jt.no_grad()`: ...（Jittor 也提供该上下文，常见于第三方 Jittor 代码示例）
+
+7. **数据加载**
+   - Jittor 有自己的 Dataset/Transform，用法通常是：自定义 `class MyDataset(Dataset) ...`，然后设置 `set_attrs(batch_size=...`, `shuffle=..., num_workers=...)`，直接 `for batch in dataset`: 迭代；不是 PyTorch 的 DataLoader 一套。一个参考实现（ViT.jittor）给了写法模板(https://github.com/li-xl/ViT.jittor?utm_source=chatgpt.com)。
+   - 单卡无需 `DistributedSampler`；
+   - 已有自定义迭代器也可直接使用。
+
+8. **基础算子与张量变形**
+   - `view` → `reshape`；`masked_fill` → `jt.where(mask, fill, x)` 组合实现。
+   - 初始化：用 `jittor.nn.init` 里的函数，比如 `init.xavier_uniform_(w)`、`init.kaiming_normal_(w)` 等（具体可按你当前版本提供的 API 选择）
+   - 张量变形：`view` 在 Jittor 里常用 `reshape；permute/transpose` 名字一致但在少数边界处行为略有差别，按返回形状检查一下。
+   - `masked_fill` 替成 `jt.where(mask, a, b)` 组合实现。
+
+9. **Layer/Dropout/Norm**
+   - 用 `jittor.nn.init`（如 `init.gauss_`、`init.xavier_uniform_` 等）；  
+   - 常用层 `nn.Linear`、`nn.Dropout`、`nn.LayerNorm` 可直接用，但检查 `eps`、`bias` 等默认参数是否与 PyTorch 对齐。
+
+10. **混合精度/AMP**
+   - PyTorch 的 `apex.amp/torch.cuda.amp` 在 Jittor 里没有等价物；Jittor 用 `jt.flags.use_tensorcore=1` 等开关和 `float16 `变量控制，或者保持 FP32 以减少不确定因素。。
+
+11. **分布式/多卡**
+   - 不使用 `torch.distributed`；Jittor 提供自身并行机制。单卡训练可删除所有分布式初始化/同步代码。(本仓库单卡运行，不需要管)
+
 主要参考：
 
 - Jittor官方文档，包含对应torch的函数。
@@ -630,127 +591,15 @@ CIDEr: 3.1612
 - Jittor相关博客，包含Jittor的使用经验。
 - GitHub相关仓库。
 
-## Debug
-
-### 1. Jittor 安装
-
-```
-sudo apt install libomp-dev
-python -m pip install git+https://github.com/Jittor/jittor.git
-```
-
-运行 Jiitor 测试代码：
-
-```
-python -m jittor.test.test_example
-```
-
-`Error: ImportError: /root/miniconda3/bin/../lib/libstdc++.so.6: version 'GLIBCXX_3.4.30' not found <br>`
-`Debug: Jittor 需要包含 GLIBCXX_3.4.30 符号版本的 C++ 标准库 (libstdc++.so.6)，当前 Conda 环境中提供的版本过旧，不包含这个符号。`
-
-```
-conda install -c conda-forge libstdcxx-ng -y
-```
-
-正常运行结果：
-
-```
-   step 990, loss = 0.0013174716150388122 {'hold_vars': 13, 'lived_vars': 61, 'lived_ops': 55}
-   ... ...
-   step 999, loss = 0.0009948192164301872 {'hold_vars': 13, 'lived_vars': 61, 'lived_ops': 55}
-   ----------------------------------------------------------------------
-   Ran 1 test in 14.363s
-   OK
-```
-
-### 2. Jittor 加载模型权重文件
-
-`ERROR:File "/root/LoRA/examples/NLG/src_jittor/gpt2_ft.py", line 405, in <module>`
-`lm_net.load_weight(jt.load(args.init_checkpoint))`
-
-Debug:
-
-1. jt.load 内部调用了 safeunpickle，它尝试用 load_pytorch 加载 PyTorch 的 checkpoint。
-2. load_pytorch 把 *.bin 文件当作一个 Zip 文件 来读（底层用 jt.ZipFile），因为 Jittor 的 PyTorch 兼容模块默认认为这是一个 .zip 格式的权重文件（类似 .pt / .pth 有时是 zip 存档）。
-
-运行 `/NLG/model_process.py` 转换生成 xxx_zip.bin 进行训练。
-
-```python
-import torch
-state_dict = torch.load('gpt2-medium-pytorch_model.bin', map_location='cpu')
-torch.save(state_dict, 'gpt2-medium-pytorch_model_zip.bin', _use_new_zipfile_serialization=True)
-```
-
-### 3. 新版本 torch 参数兼容
-
-`NLG/src/gpu.py` & `NLG/src_jittor/gpu.py`
-
-local_rank 在新版本 torch 中弃用，补充参数处理兼容
-
-```python
-def add_gpu_params(parser: argparse.ArgumentParser):
-    # parser.add_argument("--local_rank", default=0, type=int, help='local rank')
-    # 修改一：参数传递
-    parser.add_argument('--local_rank', '--local-rank', dest='local_rank', default=0, type=int,
-                        help='local rank passed from distributed launcher.')
-```
-
-### 4. evaluation 中 meteor 函数计算错误
-
-`NLG/eval/eval.py`
-
-`ERROR:Error: test and reference not same length`
-
-Debug: parse 函数中读取文件的方式。当使用 f.read().split('\n') 时，如果文件末尾有换行符，会产生一个额外的空字符串元素，导致列表长度不一。
-
-替换成下述修改后的代码：
-
-```python
-# ... existing code ...
-
-def meteor_score(references, hypothesis, num_refs, lng='en'):
-    logging.info('STARTING TO COMPUTE METEOR...')
-    print('STARTING TO COMPUTE METEOR...')
-    hyps_tmp, refs_tmp = 'hypothesis_meteor', 'reference_meteor'
-
-    # Filter out empty entries
-    references_nonempty = []
-    hypothesis_nonempty = []
-    for i, refs in enumerate(references):
-        if any(ref.strip() for ref in refs) and hypothesis[i].strip():
-            references_nonempty.append(refs)
-            hypothesis_nonempty.append(hypothesis[i])
-
-    with codecs.open(hyps_tmp, 'w', 'utf-8') as f:
-        f.write('\n'.join(hypothesis_nonempty)) 
-
-    linear_references = []
-    for refs in references_nonempty:
-        for i in range(num_refs):
-            linear_references.append(refs[i])
-
-    with codecs.open(refs_tmp, 'w', 'utf-8') as f:
-        f.write('\n'.join(linear_references))
-
-    try:
-# ... existing code ...
-        result = subprocess.check_output(command, shell=True)
-        meteor = result.split(b'\n')[-2].split()[-1]
-    except:
-# ... existing code ...
-        print('ERROR ON COMPUTING METEOR. MAKE SURE YOU HAVE JAVA INSTALLED GLOBALLY ON YOUR MACHINE.')
-        meteor = -1
-
-    try:
-# ... existing code ...
-
-```
 
 ## Reference
 
 1. LoRA official repo https://github.com/microsoft/LoRA
 2. Jittor official repo https://github.com/Jittor/jittor
-3. LoRA Jittor 1 https://github.com/waywooKwong/LoRA-Jittor
+3. LoRA Jittor 1 https://github.com/GsjResilient/lora_jittor
+4. LoRA Jittor 2 https://github.com/coder-yd/Lora_jittor
+5. LoRA Jittor 3 https://github.com/zhenrys/LoRA-GPT2-E2E-pytorch-jittor
+6. LoRA Jittor 4 https://github.com/waywooKwong/LoRA-Jittor
 
 
 ### Acknowledgement
