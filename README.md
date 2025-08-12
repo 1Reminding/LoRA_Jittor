@@ -38,7 +38,7 @@ PS:如果计算资源有限，用少量数据的训练效果和pytorch版本的�
 * [X] [训练脚本](#run)
 * [X] [测试脚本](#run)
 * [X] [性能Log](#traineval-log)
-* [X] [jittor与pytorch实现对齐的实验log](#performance-comparison)
+* [X] [jittor与pytorch实现对齐的实验log](#traineval-log)
 
 ## Content
 
