@@ -1,0 +1,9 @@
+Evaluation results for model.9465.pt:
+SCORES:
+==============
+BLEU: 0.6714
+NIST: 0.7517
+METEOR: 0.3908
+ROUGE_L: 0.6285
+CIDEr: 0.2943
+
